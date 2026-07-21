@@ -302,27 +302,49 @@ def log_normal_masses(
 
 def ringdown_prior(
     cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
-) -> (PriorDict, bool):
+) -> tuple[PriorDict, bool]:
     """
-    Define a Bilby `PriorDict` containing distributions for ringdown parameters
+    Define a Bilby `PriorDict` for ml4gw ringdown waveforms.
 
-    Quality, Frequency, and Distance are defined in the detector frame
+    Frequency and distance are specified in Hz and Mpc, respectively. All
+    waveform parameters are defined in the detector frame. Sky location and
+    polarization parameters are included for projecting the generated plus
+    and cross polarizations onto a detector network.
 
     Args:
-        cosmology: An `astropy` cosmology, used to determine distance sampling
+        cosmology:
+            An `astropy` cosmology used to sample luminosity distance uniformly
+            in comoving volume.
 
     Returns:
-        prior: `
-            PriorDict` containing the specified distributions
+        prior:
+            `PriorDict` containing the parameters expected by
+            `ml4gw.waveforms.Ringdown`, along with the sky location and
+            polarization parameters needed for detector projection.
         detector_frame_prior:
-            A boolean indicating if the prior is in the detector frame.
+            A boolean indicating that the waveform parameters are defined in
+            the detector frame.
     """
-    prior = uniform_extrinsic()
+    prior = PriorDict()
+
+    # Parameters consumed directly by ml4gw.waveforms.Ringdown
+    prior["frequency"] = LogUniform(100, 1000, unit="Hz")
     prior["quality"] = Uniform(8, 20)
-    prior["frequency"] = LogUniform(100, 1000)
+    prior["epsilon"] = Uniform(0, 0.1)
+    prior["phase"] = Uniform(0, 2 * np.pi, unit=rad)
+    prior["inclination"] = Sine(unit=rad)
     prior["distance"] = UniformComovingVolume(
-        100, 1000, name="luminosity_distance", cosmology=cosmology
+        100,
+        1000,
+        name="luminosity_distance",
+        cosmology=cosmology,
+        unit=mpc,
     )
+
+    # Extrinsic parameters used to project polarizations onto detectors
+    prior["dec"] = Cosine(unit=rad)
+    prior["ra"] = Uniform(0, 2 * np.pi, unit=rad)
+    prior["psi"] = Uniform(0, np.pi, unit=rad)
 
     detector_frame_prior = True
     return prior, detector_frame_prior
