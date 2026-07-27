@@ -3,7 +3,11 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from ledger.injections import BilbyParameterSet, _WaveformGenerator
+from ledger.injections import (
+    BilbyParameterSet,
+    RingdownWaveformPolarizationSet,
+    _WaveformGenerator,
+)
 
 
 @pytest.fixture
@@ -48,6 +52,75 @@ def test_parameter_conversion(bilby_param_set, reference_frequency):
         np.allclose(
             getattr(bilby_param_set, key), getattr(new_params, key), rtol=1e-16
         )
+
+
+class TestRingdownWaveformPolarizationSet:
+    @pytest.fixture
+    def ringdown_waveforms(self):
+        num_waveforms = 2
+        sample_rate = 128
+        duration = 1
+        waveform_size = int(sample_rate * duration)
+        return RingdownWaveformPolarizationSet(
+            frequency=np.array([20, 30]),
+            quality=np.array([10, 15]),
+            epsilon=np.array([0.01, 0.02]),
+            phase=np.array([0, np.pi / 4]),
+            inclination=np.array([np.pi / 3, np.pi / 2]),
+            distance=np.array([100, 200]),
+            ra=np.array([0.1, 0.2]),
+            dec=np.array([-0.1, 0.1]),
+            psi=np.array([0.3, 0.4]),
+            cross=np.ones((num_waveforms, waveform_size)),
+            plus=2 * np.ones((num_waveforms, waveform_size)),
+            sample_rate=sample_rate,
+            duration=duration,
+            right_pad=0.5,
+            num_injections=num_waveforms,
+        )
+
+    def test_waveforms(self, ringdown_waveforms):
+        waveforms = ringdown_waveforms.get_waveforms()
+
+        assert len(ringdown_waveforms) == 2
+        assert ringdown_waveforms.waveform_duration == 1
+        assert waveforms.shape == (2, 2, 128)
+        np.testing.assert_array_equal(waveforms[:, 0], 1)
+        np.testing.assert_array_equal(waveforms[:, 1], 2)
+
+    def test_hdf5_round_trip(self, ringdown_waveforms, tmp_path):
+        fname = tmp_path / "ringdown-waveforms.hdf5"
+        ringdown_waveforms.write(fname)
+        loaded = RingdownWaveformPolarizationSet.read(fname)
+
+        assert len(loaded) == len(ringdown_waveforms)
+        for name, field in ringdown_waveforms.__dataclass_fields__.items():
+            expected = getattr(ringdown_waveforms, name)
+            actual = getattr(loaded, name)
+            if field.metadata["kind"] == "metadata":
+                assert actual == expected
+            else:
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_rejects_unequal_parameter_lengths(self, ringdown_waveforms):
+        kwargs = {
+            name: getattr(ringdown_waveforms, name)
+            for name in ringdown_waveforms.__dataclass_fields__
+        }
+        kwargs["frequency"] = np.array([20])
+
+        with pytest.raises(ValueError, match="entries, expected"):
+            RingdownWaveformPolarizationSet(**kwargs)
+
+    def test_rejects_inconsistent_waveform_duration(self, ringdown_waveforms):
+        kwargs = {
+            name: getattr(ringdown_waveforms, name)
+            for name in ringdown_waveforms.__dataclass_fields__
+        }
+        kwargs["cross"] = np.ones((2, 64))
+
+        with pytest.raises(ValueError, match="Specified waveform duration"):
+            RingdownWaveformPolarizationSet(**kwargs)
 
 
 class TestWaveformGenerator:

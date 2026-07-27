@@ -233,6 +233,33 @@ class BilbyParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
 
 
 @dataclass
+class RingdownParameterSet(Ledger):
+    """Parameters used to generate and project ringdown waveforms.
+
+    Attributes:
+        frequency: Central ringdown frequency in Hz.
+        quality: Ringdown quality factor.
+        epsilon: Fraction of the remnant mass radiated in the ringdown.
+        phase: Initial ringdown phase in radians.
+        inclination: Source inclination in radians.
+        distance: Luminosity distance in Mpc.
+        ra: Right ascension in radians.
+        dec: Declination in radians.
+        psi: Polarization angle in radians.
+    """
+
+    frequency: np.ndarray = parameter()
+    quality: np.ndarray = parameter()
+    epsilon: np.ndarray = parameter()
+    phase: np.ndarray = parameter()
+    inclination: np.ndarray = parameter()
+    distance: np.ndarray = parameter()
+    ra: np.ndarray = parameter()
+    dec: np.ndarray = parameter()
+    psi: np.ndarray = parameter()
+
+
+@dataclass
 class LALParameterSet(Ledger):
     """Binary parameters with LAL convention.
 
@@ -380,7 +407,8 @@ class InjectionMetadata(Ledger):
     Attributes:
         sample_rate: Waveform sampling rate in Hz.
         duration: Waveform duration in seconds.
-        right_pad: Time from coalescence to right edge in seconds.
+        right_pad: Time from the signal defining point to the right edge in
+            seconds.
         num_injections: Total number of injections generated.
     """
 
@@ -450,6 +478,28 @@ class InjectionMetadata(Ledger):
                 return ours
             return ours + theirs
         return super().compare_metadata(key, ours, theirs)
+
+
+@dataclass
+class RingdownWaveformPolarizationSet(InjectionMetadata, RingdownParameterSet):
+    """Ringdown polarizations and the parameters used to generate them.
+
+    Attributes:
+        cross: Cross-polarization waveform array.
+        plus: Plus-polarization waveform array.
+    """
+
+    cross: np.ndarray = waveform()
+    plus: np.ndarray = waveform()
+
+    @property
+    def waveform_duration(self):
+        """Calculate waveform duration from array length and sample rate."""
+        return self.cross.shape[-1] / self.sample_rate
+
+    def get_waveforms(self) -> np.ndarray:
+        """Get waveforms with shape (num_injections, 2, num_samples)."""
+        return np.stack([self.cross, self.plus], axis=-2)
 
 
 @dataclass(frozen=True)
