@@ -2,6 +2,7 @@ from pathlib import Path
 import shutil
 
 import law
+import luigi
 from luigi.util import inherits
 
 from aframe.config import paths
@@ -12,6 +13,23 @@ from aframe.tasks.data.condor.workflows import StaticMemoryWorkflow
 from aframe.tasks.data.waveforms.base import DeployTask, WaveformParams
 
 
+def _get_waveform_set_cls(waveform_type):
+    from ledger.injections import (
+        RingdownWaveformPolarizationSet,
+        WaveformPolarizationSet,
+        waveform_class_factory,
+    )
+
+    if waveform_type == "ringdown":
+        return RingdownWaveformPolarizationSet
+
+    return waveform_class_factory(
+        ["cross", "plus"],
+        WaveformPolarizationSet,
+        "WaveformPolarizationSet",
+    )
+
+
 @inherits(WaveformParams)
 class DeployTrainingWaveforms(
     AframeDataTask, DeployTask, law.LocalWorkflow, StaticMemoryWorkflow
@@ -19,6 +37,12 @@ class DeployTrainingWaveforms(
     """
     Generate waveforms for training
     """
+
+    waveform_type = luigi.ChoiceParameter(
+        default="cbc",
+        choices=("cbc", "ringdown"),
+        description="Type of training waveform to generate",
+    )
 
     condor_directory = PathParameter(
         description="Directory where condor logs will be saved",
@@ -57,6 +81,7 @@ class DeployTrainingWaveforms(
             reference_frequency=self.reference_frequency,
             waveform_approximant=self.waveform_approximant,
             right_pad=self.right_pad,
+            waveform_type=self.waveform_type,
         )
         chunks = (min(64, num_signals), waveforms.get_waveforms().shape[-1])
         with self.output().open("w") as f:
@@ -95,25 +120,27 @@ class TrainingWaveforms(AframeDataTask):
         return list(map(Path, [targets.path for targets in self.targets]))
 
     def run(self):
-        from ledger.injections import (
-            WaveformPolarizationSet,
-            waveform_class_factory,
-        )
-
-        cls = waveform_class_factory(
-            ["cross", "plus"],
-            WaveformPolarizationSet,
-            "WaveformPolarizationSet",
-        )
+        cls = _get_waveform_set_cls(self.waveform_type)
         # Read in one of the waveform files so we can get information
         # for chunking the dataset
         waveforms = cls.read(self.waveform_files[0]).get_waveforms()
-        num_waveforms = len(waveforms)
-        num_files = len(self.waveform_files)
-
-        chunks = (min(64, num_waveforms * num_files), waveforms.shape[-1])
-        with self.output().open("w") as f:
-            cls.aggregate(self.waveform_files, f, clean=True, chunks=chunks)
+        chunks = (min(64, self.num_signals), waveforms.shape[-1])
+        output = self.output()
+        if output.path.startswith("s3://"):
+            with output.open("w") as f:
+                cls.aggregate(
+                    self.waveform_files,
+                    f,
+                    clean=True,
+                    chunks=chunks,
+                )
+        else:
+            cls.aggregate(
+                self.waveform_files,
+                output.path,
+                clean=True,
+                chunks=chunks,
+            )
 
         # clean up temporary directory
         shutil.rmtree(self.tmp_dir)
