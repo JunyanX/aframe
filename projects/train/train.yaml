@@ -76,6 +76,8 @@ data:
     waveform_sampler:
       class_path: train.data.waveforms.WaveformLoader
       init_args:
+        # Defaults to cbc; set to ringdown for ringdown polarization files.
+        # waveform_type: cbc
         val_waveform_file: ${oc.env:AFRAME_TRAIN_WAVEFORMS_DIR}/val_waveforms.hdf5
         training_waveform_path: ${oc.env:AFRAME_TRAIN_WAVEFORMS_DIR}/training_waveforms.hdf5
     # waveform_sampler: 

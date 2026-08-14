@@ -3,13 +3,16 @@ from pathlib import Path
 import logging
 import math
 import warnings
-from typing import Iterable, Optional
+from typing import Iterable, Literal, Optional
 
 import h5py
 import numpy as np
 import torch
 
-from ledger.injections import WaveformPolarizationSet
+from ledger.injections import (
+    RingdownWaveformPolarizationSet,
+    WaveformPolarizationSet,
+)
 from .sampler import WaveformSampler
 
 
@@ -27,6 +30,7 @@ class WaveformLoader(WaveformSampler):
         self,
         *args,
         training_waveform_path: Path,
+        waveform_type: Literal["cbc", "ringdown"] = "cbc",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -37,9 +41,19 @@ class WaveformLoader(WaveformSampler):
         else:
             self.training_waveform_files = [training_waveform_path]
 
-        waveform_set = WaveformPolarizationSet.read(
-            self.training_waveform_files[0]
-        )
+        waveform_set_classes = {
+            "cbc": WaveformPolarizationSet,
+            "ringdown": RingdownWaveformPolarizationSet,
+        }
+        try:
+            waveform_set_cls = waveform_set_classes[waveform_type]
+        except KeyError:
+            raise ValueError(
+                "waveform_type must be either 'cbc' or 'ringdown', "
+                f"got '{waveform_type}'"
+            ) from None
+
+        waveform_set = waveform_set_cls.read(self.training_waveform_files[0])
         if waveform_set.right_pad != self.right_pad:
             raise ValueError(
                 "Training waveform file does not have the same "
