@@ -1,7 +1,11 @@
 from jsonargparse import ArgumentParser
 
 from data.waveforms.rejection import rejection_sample
-from ledger.injections import WaveformSet, waveform_class_factory
+from ledger.injections import (
+    RingdownWaveformSet,
+    WaveformSet,
+    waveform_class_factory,
+)
 
 parser = ArgumentParser()
 parser.add_function_arguments(rejection_sample)
@@ -12,9 +16,14 @@ def main(args):
     args = args.validation_waveforms.as_dict()
     output_file = args.pop("output_file")
 
+    base_cls = (
+        RingdownWaveformSet
+        if args.get("waveform_type") == "ringdown"
+        else WaveformSet
+    )
     cls = waveform_class_factory(
         args["ifos"],
-        WaveformSet,
+        base_cls,
         "IfoWaveformSet",
     )
 

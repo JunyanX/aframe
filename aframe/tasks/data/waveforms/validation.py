@@ -15,6 +15,19 @@ from aframe.tasks.data.fetch import FetchTrain
 from aframe.tasks.data.waveforms.base import DeployTask, WaveformParams
 
 
+def _get_waveform_set_cls(ifos, waveform_type, cls_name):
+    from ledger.injections import (
+        RingdownWaveformSet,
+        WaveformSet,
+        waveform_class_factory,
+    )
+
+    base_cls = (
+        RingdownWaveformSet if waveform_type == "ringdown" else WaveformSet
+    )
+    return waveform_class_factory(ifos, base_cls, cls_name)
+
+
 @inherits(WaveformParams)
 class DeployValidationWaveforms(
     AframeDataTask,
@@ -26,6 +39,11 @@ class DeployValidationWaveforms(
     Generate waveforms for validation via rejection sampling
     """
 
+    waveform_type = luigi.ChoiceParameter(
+        default="cbc",
+        choices=("cbc", "ringdown"),
+        description="Type of validation waveform to generate",
+    )
     ifos = luigi.ListParameter(
         description="Interferometers for which waveforms will be generated"
     )
@@ -104,11 +122,10 @@ class DeployValidationWaveforms(
 
         from data.waveforms.rejection import rejection_sample
         from data.waveforms.utils import load_psds
-        from ledger.injections import WaveformSet, waveform_class_factory
 
-        cls = waveform_class_factory(
+        cls = _get_waveform_set_cls(
             self.ifos,
-            WaveformSet,
+            self.waveform_type,
             "IfoWaveformSet",
         )
 
@@ -140,6 +157,7 @@ class DeployValidationWaveforms(
             snr_threshold=self.snr_threshold,
             psd=psd,
             max_num_samples=self.max_num_samples,
+            waveform_type=self.waveform_type,
         )
         waveform_set = cls(**parameters)
         waveform_set.write(self.output().path)
@@ -177,11 +195,9 @@ class ValidationWaveforms(AframeDataTask):
         return list(map(Path, [targets.path for targets in self.targets]))
 
     def run(self):
-        from ledger.injections import WaveformSet, waveform_class_factory
-
-        cls = waveform_class_factory(
+        cls = _get_waveform_set_cls(
             self.ifos,
-            WaveformSet,
+            self.waveform_type,
             "WaveformSet",
         )
         with self.output().open("w") as f:
