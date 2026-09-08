@@ -712,11 +712,11 @@ class WaveformPolarizationSet(InjectionMetadata, BilbyParameterSet):
 
 
 @dataclass
-class InjectionParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
-    """Intrinsic and extrinsic parameters for injection campaign.
+class SnrParameterSet(Ledger):
+    """SNR information for an injection campaign.
 
-    Combines extrinsic and intrinsic parameters along with SNR information
-    for injections into detector data.
+    Mixed into any parameter set whose injections have been projected onto a
+    detector network, so that these fields are declared in one place.
 
     Attributes:
         snr: Overall signal-to-noise ratio.
@@ -747,11 +747,33 @@ class InjectionParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
 
 
 @dataclass
-class WaveformSet(InjectionMetadata, InjectionParameterSet):
-    """A set of waveform polarizations along with their metadata.
+class InjectionParameterSet(
+    SnrParameterSet, ExtrinsicParameterSet, IntrinsicParameterSet
+):
+    """Intrinsic and extrinsic parameters for injection campaign.
 
-    Stores both polarizations of gravitational wave strain for injections
-    along with their parameters, SNRs, and metadata.
+    Combines extrinsic and intrinsic parameters with the SNR information
+    from `SnrParameterSet` for injections into detector data.
+    """
+
+
+@dataclass
+class RingdownInjectionParameterSet(SnrParameterSet, RingdownParameterSet):
+    """Ringdown parameters for an injection campaign.
+
+    The ringdown counterpart of `InjectionParameterSet`: the parameters
+    consumed by `ml4gw.waveforms.Ringdown` plus sky location, along with the
+    SNRs measured after projecting onto a detector network.
+    """
+
+
+@dataclass
+class WaveformSetBase(InjectionMetadata):
+    """Waveform stacking behaviour, independent of the parameter set.
+
+    Holds everything about a set of waveforms that does not depend on which
+    parameters generated them, so that CBC and ringdown sets share one
+    implementation.
     """
 
     def __post_init__(self):
@@ -785,6 +807,25 @@ class WaveformSet(InjectionMetadata, InjectionParameterSet):
             Number of waveform polarizations.
         """
         return len(self.waveform_fields)
+
+
+@dataclass
+class WaveformSet(WaveformSetBase, InjectionParameterSet):
+    """A set of waveform polarizations along with their metadata.
+
+    Stores both polarizations of gravitational wave strain for injections
+    along with their parameters, SNRs, and metadata.
+    """
+
+
+@dataclass
+class RingdownWaveformSet(WaveformSetBase, RingdownInjectionParameterSet):
+    """A set of ringdown waveforms along with their metadata.
+
+    The ringdown counterpart of `WaveformSet`. Pass it to
+    `waveform_class_factory` to add one waveform field per interferometer,
+    for waveforms that have already been projected onto a detector network.
+    """
 
 
 # TODO: rename this to InjectionCampaign

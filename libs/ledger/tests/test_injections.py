@@ -5,8 +5,12 @@ import pytest
 
 from ledger.injections import (
     BilbyParameterSet,
+    InjectionParameterSet,
     RingdownWaveformPolarizationSet,
+    RingdownWaveformSet,
+    WaveformSet,
     _WaveformGenerator,
+    waveform_class_factory,
 )
 
 
@@ -396,3 +400,200 @@ class TestLigoResponseSet:
 
             if i == 4:
                 assert wave_end == (x.shape[-1] + sample_rate)
+
+
+# Field order is part of the on-disk contract for every archive written
+# before the SnrParameterSet mixin was extracted, so pin it explicitly.
+CBC_INJECTION_FIELDS = [
+    "mass_1",
+    "mass_2",
+    "a_1",
+    "a_2",
+    "tilt_1",
+    "tilt_2",
+    "phi_12",
+    "phi_jl",
+    "ra",
+    "dec",
+    "redshift",
+    "psi",
+    "theta_jn",
+    "phase",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+]
+
+
+def test_snr_mixin_preserves_cbc_field_order():
+    fields = list(InjectionParameterSet.__dataclass_fields__)
+    assert fields == CBC_INJECTION_FIELDS
+
+
+def test_mismatched_waveform_classes_fail_loudly(tmp_path):
+    """Reading a file with the wrong ledger class must raise, not mis-load.
+
+    The validation consumer adds waveform channels straight onto detector
+    background, so a partial or mis-channelled load would corrupt training
+    silently. Every declared field is looked up by name at read time, so a
+    mismatch raises instead.
+    """
+    num, sample_rate, duration = 2, 128, 1
+    size = int(sample_rate * duration)
+    params = {
+        "frequency": np.array([200.0, 300.0]),
+        "quality": np.array([10.0, 15.0]),
+        "epsilon": np.array([0.01, 0.02]),
+        "phase": np.array([0.0, 0.5]),
+        "inclination": np.array([0.3, 0.7]),
+        "distance": np.array([100.0, 200.0]),
+        "ra": np.array([0.1, 0.2]),
+        "dec": np.array([-0.1, 0.1]),
+        "psi": np.array([0.3, 0.4]),
+    }
+    meta = {
+        "sample_rate": sample_rate,
+        "duration": duration,
+        "right_pad": 0.5,
+        "num_injections": num,
+    }
+
+    polarizations = RingdownWaveformPolarizationSet(
+        **params,
+        cross=np.ones((num, size)),
+        plus=2 * np.ones((num, size)),
+        **meta,
+    )
+    polarization_file = tmp_path / "polarizations.hdf5"
+    polarizations.write(polarization_file)
+
+    ringdown_cls = waveform_class_factory(
+        ["h1", "l1"], RingdownWaveformSet, "IfoRingdownWaveformSet"
+    )
+    per_ifo = ringdown_cls(
+        **params,
+        snr=np.array([8.0, 12.0]),
+        ifo_snrs=np.array([[6.0, 5.0], [9.0, 8.0]]),
+        ifos=["h1", "l1"],
+        h1=np.ones((num, size)),
+        l1=2 * np.ones((num, size)),
+        **meta,
+    )
+    per_ifo_file = tmp_path / "per_ifo.hdf5"
+    per_ifo.write(per_ifo_file)
+
+    # a training-style cross/plus file is not a validation file
+    with pytest.raises(ValueError, match="no dataset"):
+        ringdown_cls.read(polarization_file)
+
+    # and vice versa
+    with pytest.raises(ValueError, match="no dataset"):
+        RingdownWaveformPolarizationSet.read(per_ifo_file)
+
+    # nor is a ringdown validation file readable as a CBC one
+    cbc_cls = waveform_class_factory(
+        ["h1", "l1"], WaveformSet, "IfoWaveformSet"
+    )
+    with pytest.raises(ValueError, match="no dataset"):
+        cbc_cls.read(per_ifo_file)
+
+
+def test_ringdown_set_carries_no_cbc_parameters():
+    fields = set(RingdownWaveformSet.__dataclass_fields__)
+    cbc_only = {
+        "mass_1",
+        "mass_2",
+        "a_1",
+        "a_2",
+        "tilt_1",
+        "tilt_2",
+        "phi_12",
+        "phi_jl",
+        "redshift",
+        "theta_jn",
+    }
+    assert not fields & cbc_only
+    assert {"snr", "ifo_snrs", "ifos"} <= fields
+
+
+class TestRingdownWaveformSet:
+    @pytest.fixture
+    def ifo_ringdown_cls(self):
+        return waveform_class_factory(
+            ["h1", "l1"],
+            RingdownWaveformSet,
+            cls_name="IfoRingdownWaveformSet",
+        )
+
+    @pytest.fixture
+    def ringdown_set(self, ifo_ringdown_cls):
+        num_waveforms = 2
+        sample_rate = 128
+        duration = 1
+        waveform_size = int(sample_rate * duration)
+        return ifo_ringdown_cls(
+            frequency=np.array([20, 30]),
+            quality=np.array([10, 15]),
+            epsilon=np.array([0.01, 0.02]),
+            phase=np.array([0, np.pi / 4]),
+            inclination=np.array([np.pi / 3, np.pi / 2]),
+            distance=np.array([100, 200]),
+            ra=np.array([0.1, 0.2]),
+            dec=np.array([-0.1, 0.1]),
+            psi=np.array([0.3, 0.4]),
+            snr=np.array([8.0, 12.0]),
+            ifo_snrs=np.array([[6.0, 5.0], [9.0, 8.0]]),
+            ifos=["h1", "l1"],
+            h1=np.ones((num_waveforms, waveform_size)),
+            l1=2 * np.ones((num_waveforms, waveform_size)),
+            sample_rate=sample_rate,
+            duration=duration,
+            right_pad=0.5,
+            num_injections=num_waveforms,
+        )
+
+    def test_waveforms_are_per_ifo_in_alphabetical_order(self, ringdown_set):
+        waveforms = ringdown_set.waveforms
+
+        assert len(ringdown_set) == 2
+        assert ringdown_set.num_waveform_fields() == 2
+        assert sorted(ringdown_set.waveform_fields) == ["h1", "l1"]
+        assert waveforms.shape == (2, 2, 128)
+        # Channels are stacked alphabetically by field name, while the
+        # validation background is stacked in config `ifos` order and the two
+        # are added element-wise. They only coincide when `ifos` is already
+        # sorted, so pin the order the ledger side promises.
+        np.testing.assert_array_equal(waveforms[:, 0], 1)
+        np.testing.assert_array_equal(waveforms[:, 1], 2)
+
+    def test_carries_snr_fields(self, ringdown_set):
+        assert ringdown_set.ifos == ["h1", "l1"]
+        np.testing.assert_array_equal(ringdown_set.snr, [8.0, 12.0])
+        assert ringdown_set.ifo_snrs.shape == (2, 2)
+
+    def test_hdf5_round_trip(self, ringdown_set, ifo_ringdown_cls, tmp_path):
+        fname = tmp_path / "ringdown-val-waveforms.hdf5"
+        ringdown_set.write(fname)
+        loaded = ifo_ringdown_cls.read(fname)
+
+        assert len(loaded) == len(ringdown_set)
+        for name, field in ringdown_set.__dataclass_fields__.items():
+            expected = getattr(ringdown_set, name)
+            actual = getattr(loaded, name)
+            if field.metadata["kind"] == "metadata":
+                if name == "ifos":
+                    assert list(actual) == list(expected)
+                else:
+                    assert actual == expected
+            else:
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_rejects_inconsistent_waveform_duration(self, ringdown_set):
+        kwargs = {
+            name: getattr(ringdown_set, name)
+            for name in ringdown_set.__dataclass_fields__
+        }
+        kwargs["h1"] = np.ones((2, 64))
+
+        with pytest.raises(ValueError, match="Specified waveform duration"):
+            type(ringdown_set)(**kwargs)
