@@ -33,7 +33,9 @@ class WaveformLoader(WaveformSampler):
         waveform_type: Literal["cbc", "ringdown"] = "cbc",
         **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        # the base class reads the validation file inside
+        # __init__, so the type has to reach it as an argument
+        super().__init__(*args, waveform_type=waveform_type, **kwargs)
         if training_waveform_path.is_dir():
             self.training_waveform_files = list(
                 training_waveform_path.iterdir()

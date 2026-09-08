@@ -4,7 +4,10 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 
-from ledger.injections import RingdownWaveformPolarizationSet
+from ledger.injections import (
+    RingdownWaveformPolarizationSet,
+    RingdownWaveformSet,
+)
 from train.data.waveforms import Hdf5WaveformLoader, WaveformLoader
 from train.data.waveforms import loader as loader_module
 
@@ -134,3 +137,30 @@ def test_hdf5_waveform_loader_reads_ringdown_polarizations(
 
     assert batch.shape == (2, 2, 8)
     assert np.isfinite(batch.numpy()).all()
+
+
+def test_waveform_loader_forwards_waveform_type_to_sampler(
+    ringdown_waveform_file,
+    ringdown_val_file,
+):
+    """`waveform_type` has to reach `WaveformSampler.__init__` as an argument.
+
+    The base class reads the validation file before the subclass body runs,
+    so setting the attribute after `super().__init__()` would be too late and
+    the ringdown validation file would be read as a CBC one.
+    """
+    loader = WaveformLoader(
+        training_waveform_path=ringdown_waveform_file,
+        waveform_type="ringdown",
+        ifos=ringdown_val_file.ifos,
+        sample_rate=ringdown_val_file.sample_rate,
+        val_waveform_file=ringdown_val_file.path,
+    )
+
+    assert loader.waveform_type == "ringdown"
+    assert issubclass(loader.waveform_set_cls, RingdownWaveformSet)
+    assert loader.get_val_waveforms(1, 0).shape == (
+        ringdown_val_file.size,
+        len(ringdown_val_file.ifos),
+        ringdown_val_file.waveform_size,
+    )

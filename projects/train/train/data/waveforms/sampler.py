@@ -1,10 +1,14 @@
 from pathlib import Path
-from typing import List
+from typing import List, Literal
 
 import torch
 from utils import x_per_y
 
-from ledger.injections import WaveformSet, waveform_class_factory
+from ledger.injections import (
+    RingdownWaveformSet,
+    WaveformSet,
+    waveform_class_factory,
+)
 
 Distribution = torch.distributions.Distribution
 
@@ -20,6 +24,9 @@ class WaveformSampler(torch.nn.Module):
             Sample rate in Hz of generated waveforms
         val_waveform_file:
             Path to the validation waveforms file.
+        waveform_type:
+            Family of waveform stored in the validation file,
+            which decides the ledger class used to read it.
     """
 
     def __init__(
@@ -28,12 +35,19 @@ class WaveformSampler(torch.nn.Module):
         ifos: List[str],
         sample_rate: float,
         val_waveform_file: Path,
+        waveform_type: Literal["cbc", "ringdown"] = "cbc",
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if waveform_type not in ("cbc", "ringdown"):
+            raise ValueError(
+                "waveform_type must be either 'cbc' or 'ringdown', "
+                f"got '{waveform_type}'"
+            )
         self.ifos = ifos
         self.sample_rate = sample_rate
         self.val_waveform_file = val_waveform_file
+        self.waveform_type = waveform_type
 
         waveform_set = self.waveform_set_cls.read(val_waveform_file)
         self.num_val_waveforms = len(waveform_set)
@@ -41,9 +55,14 @@ class WaveformSampler(torch.nn.Module):
 
     @property
     def waveform_set_cls(self):
+        base_cls = (
+            RingdownWaveformSet
+            if self.waveform_type == "ringdown"
+            else WaveformSet
+        )
         cls = waveform_class_factory(
             self.ifos,
-            WaveformSet,
+            base_cls,
             "WaveformSet",
         )
         return cls
