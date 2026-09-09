@@ -24,9 +24,33 @@ SANDBOX_CONFIGS = [
     root / "projects" / "train" / "configs" / "training_prior.yaml",
 ]
 
+RINGDOWN_CONFIGS = [
+    root / "aframe" / "pipelines" / "sandbox" / "configs" / "ringdown.cfg",
+    root / "aframe" / "pipelines" / "sandbox" / "configs" / "base.cfg",
+    root / "projects" / "train" / "configs" / "ringdown.yaml",
+    root / "projects" / "export" / "export.yaml",
+]
+
 REVIEW_CONFIGS = [
     root / "aframe" / "pipelines" / "sandbox" / "configs" / "review.cfg"
 ]
+
+# Training config that gets copied to <dir>/train.yaml, which is where the
+# generated .cfg points `train_config`. Only needed for modes whose training
+# config isn't already named train.yaml.
+TRAIN_CONFIGS = {
+    "ringdown": root / "projects" / "train" / "configs" / "ringdown.yaml",
+}
+
+# law target the generated run.sh invokes. Ringdown stops at Train because
+# TestingWaveforms has no ringdown code path yet, so the rest of the sandbox
+# pipeline can't run against ringdown signals.
+RUN_TARGETS = {
+    "sandbox": "aframe.pipelines.sandbox.Sandbox",
+    "review": "aframe.pipelines.sandbox.Sandbox",
+    "tune": "aframe.pipelines.sandbox.Tune",
+    "ringdown": "aframe.tasks.Train",
+}
 
 ONLINE_CONFIGS = [
     root / "projects" / "online" / "config.yaml",
@@ -39,6 +63,7 @@ def copy_configs(
     path: Path,
     configs: list[Path],
     pipeline: str,
+    train_config: Optional[Path] = None,
 ):
     """
     Copy the configuration files to the specified directory for editing.
@@ -52,7 +77,10 @@ def copy_configs(
         configs:
             The list of configuration files to copy.
         pipeline:
-            The type of pipeline to initialize. Either 'tune' or 'sandbox'.
+            The type of pipeline to initialize.
+        train_config:
+            Training config to copy to `train.yaml`, for pipelines whose
+            training config has a different name in the repository.
     """
 
     for config in configs:
@@ -71,7 +99,7 @@ def copy_configs(
             # set the train config file
             # to the one in the init directory
             train_task = (
-                "luigi_Train" if pipeline == "sandbox" else "luigi_TuneTask"
+                "luigi_TuneTask" if pipeline == "tune" else "luigi_Train"
             )
             cfg[train_task]["train_config"] = str(path / "train.yaml")
 
@@ -92,6 +120,8 @@ def copy_configs(
             with open(dest, "w") as f:
                 cfg.write(f)
         else:
+            if train_config is not None and config == train_config:
+                dest = path / "train.yaml"
             shutil.copy(config, dest)
 
 
@@ -203,13 +233,11 @@ def create_offline_runfile(
     base = path if s3_bucket is None else s3_bucket
 
     config = path / f"{pipeline}.cfg"
-    # For running the review check, we're overloading the sandbox pipeline,
-    # so reset the name
-    if pipeline == "review":
-        pipeline = "sandbox"
+    # note that review overloads the sandbox pipeline
+    target = RUN_TARGETS[pipeline]
     # make the below one string
     cmd = f"LAW_CONFIG_FILE={config} uv run --directory {root} "
-    cmd += f"law run aframe.pipelines.sandbox.{pipeline.capitalize()} "
+    cmd += f"law run {target} "
     cmd += "--workers 5 --gpus 0"
     content = f"""
     #!/bin/bash
@@ -238,7 +266,7 @@ def main():
     offline_parser = ArgumentParser()
     offline_parser.add_argument(
         "--mode",
-        choices=["sandbox", "tune", "review"],
+        choices=["sandbox", "tune", "review", "ringdown"],
         default="sandbox",
         help="Specify the type run to initialize",
     )
@@ -284,9 +312,15 @@ def main():
             configs = TUNE_CONFIGS
         elif args.mode == "review":
             configs = REVIEW_CONFIGS
+        elif args.mode == "ringdown":
+            configs = RINGDOWN_CONFIGS
         else:
-            raise ValueError("Mode must be 'sandbox', 'tune', or 'review'")
-        copy_configs(directory, configs, args.mode)
+            raise ValueError(
+                "Mode must be 'sandbox', 'tune', 'review', or 'ringdown'"
+            )
+        copy_configs(
+            directory, configs, args.mode, TRAIN_CONFIGS.get(args.mode)
+        )
         create_offline_runfile(directory, args.mode, args.s3_bucket)
 
     elif subcommand == "online":
