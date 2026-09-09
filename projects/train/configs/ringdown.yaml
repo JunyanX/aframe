@@ -1,0 +1,160 @@
+# Training config for ringdown signals. Pointed at by
+# aframe/pipelines/sandbox/configs/ringdown.cfg.
+#
+# commented args represent values filled out
+# by train task at run time. To build a functional
+# standalone config, add these in.
+ 
+# To start training from a checkpoint, uncomment the below argument
+# and specify a path to the desired checkpoint
+# ckpt_path: ""
+model:
+  class_path: train.model.SupervisedAframe
+  init_args:
+    # architecture
+    arch:
+      class_path: architectures.supervised.SupervisedTimeDomainResNet
+      init_args:
+        layers: [3, 4, 6, 3]
+        norm_layer:
+          class_path: ml4gw.nn.norm.GroupNorm1DGetter
+          init_args:
+            groups: 16
+    metric:
+      class_path: train.metrics.TimeSlideAUROC
+      init_args:
+        max_fpr: 1e-3
+        pool_length: 8
+
+    # optimization params
+    weight_decay: 0.0
+    learning_rate: 0.000585
+    pct_lr_ramp: 0.115
+data:
+  class_path: train.data.supervised.TimeDomainSupervisedAframeDataset
+  init_args:
+    # loading args
+    # data_dir:
+    # ifos:
+
+    # dataloading args
+    batch_size: 384
+    batches_per_epoch: 3700
+    num_files_per_batch: 10
+    # Used for loading waveforms from disk
+    chunks_per_epoch: 10
+    chunk_size: 10000
+
+    # preprocessing args
+    # kernel_length:
+    psd_length: 8
+    # fduration:
+    # highpass: 
+    # lowpass: 
+    fftlength: null
+
+    # augmentation args
+    waveform_prob: 0.277
+    swap_prob: 0.014
+    mute_prob: 0.055
+    # For a CBC the defining point is the merger and the informative
+    # part of the signal precedes it, so the default config lets the
+    # merger sit as close as 0.05 s to the right edge of the kernel.
+    # A ringdown's defining point is its onset and everything before it
+    # is zero, so the pads are flipped: the onset must stay at least
+    # `right_pad` from the right edge, guaranteeing the network always
+    # sees a full second of post-onset data.
+    left_pad: 0.1
+    right_pad: 1.0
+    snr_sampler:
+      class_path: ml4gw.distributions.PowerLaw
+      init_args: 
+        minimum: 4
+        maximum: 100
+        index: -3
+      # uncomment below and comment above for 
+      # snr scheduling
+      # class_path: train.augmentations.SnrSampler
+      # init_args:
+         # max_min_snr: 12
+         # min_min_snr: 4
+         # max_snr: 100
+         # alpha: -3
+         # decay_steps: 989
+    # If loading waveforms from disk, waveform_sampler should be
+    # an instance of train.data.waveforms.WaveformLoader
+    waveform_sampler:
+      class_path: train.data.waveforms.WaveformLoader
+      init_args:
+        waveform_type: ringdown
+        val_waveform_file: ${oc.env:AFRAME_TRAIN_WAVEFORMS_DIR}/val_waveforms.hdf5
+        training_waveform_path: ${oc.env:AFRAME_TRAIN_WAVEFORMS_DIR}/training_waveforms.hdf5
+    # waveform_sampler: 
+    #   class_path: train.data.waveforms.generator.cbc.CBCGenerator
+    #   init_args:
+    #     training_prior: ./training_prior.yaml
+    #     val_waveform_file: ${oc.env:AFRAME_TRAIN_WAVEFORMS_DIR}/val_waveforms.hdf5
+    #     approximant: ml4gw.waveforms.IMRPhenomPv2
+    #     f_min: 20
+    #     f_ref: 40
+    #     duration: 8
+    # Extrinsic parameter distributions
+    dec: 
+      class_path: ml4gw.distributions.Cosine
+    psi: 
+      class_path: torch.distributions.Uniform
+      init_args:
+        low: 0
+        high: 3.14159
+        validate_args: false
+    phi: 
+      class_path: torch.distributions.Uniform
+      init_args:
+        low: 0
+        high: 6.28318
+        validate_args: false
+    # validation args
+    valid_stride: 0.5
+    num_valid_views: 5
+    valid_livetime: 57600 
+trainer:
+  # by default, use a local CSV logger.
+  # Options in train task for using a
+  # wandb logger instead
+  logger:
+    - class_path: lightning.pytorch.loggers.CSVLogger
+      init_args:
+        # save_dir:
+        flush_logs_every_n_steps: 10
+  callbacks:
+    # Uncomment below if you want to stop early based on validation score
+    # - class_path: lightning.pytorch.callbacks.EarlyStopping
+    #   init_args:
+    #     monitor: "valid_auroc"
+    #     mode: "max"
+    #     patience:
+
+    # custom model checkpoint for saving and
+    # tracing best model at end of traiing
+    # that will be used for downstream export
+    - class_path: train.callbacks.ModelCheckpoint
+      init_args:
+        monitor: "valid_auroc"
+        mode: "max"
+        save_top_k: 1
+        save_last: true
+        auto_insert_metric_name: false
+    - class_path: train.callbacks.SaveAugmentedBatch
+  # uncomment below if you want to profile
+  # profiler:
+    # class_path: lightning.pytorch.profilers.PyTorchProfiler
+    # dict_kwargs:
+      # profile_memory: true
+  # devices:
+  # strategy: set to ddp if len(devices) > 1
+  #precision: 16-mixed
+  accelerator: auto
+  max_epochs: 200
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 20
+  benchmark: true
