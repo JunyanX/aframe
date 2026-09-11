@@ -43,8 +43,11 @@ TRAIN_CONFIGS = {
 }
 
 # law target the generated run.sh invokes. Ringdown stops at Train because
-# TestingWaveforms has no ringdown code path yet, so the rest of the sandbox
-# pipeline can't run against ringdown signals.
+# inference, recovery and sensitivity analysis still hardcode the CBC
+# classes, so the rest of the sandbox pipeline can't run against ringdown
+# signals. TestingWaveforms does now generate ringdowns, but it is not on
+# the way to Train, so the run.sh gets it as a second, commented command
+# rather than as the target.
 RUN_TARGETS = {
     "sandbox": "aframe.pipelines.sandbox.Sandbox",
     "review": "aframe.pipelines.sandbox.Sandbox",
@@ -239,6 +242,10 @@ def create_offline_runfile(
     cmd = f"LAW_CONFIG_FILE={config} uv run --directory {root} "
     cmd += f"law run {target} "
     cmd += "--workers 5 --gpus 0"
+    if pipeline == "ringdown":
+        # keep the indent: write_content dedents by the common prefix
+        alt = cmd.replace(target, "aframe.tasks.TestingWaveforms")
+        cmd += f"\n\n    # testing waveforms, run separately:\n    # {alt}"
     content = f"""
     #!/bin/bash
     # Export environment variables
