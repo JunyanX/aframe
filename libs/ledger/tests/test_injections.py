@@ -7,6 +7,7 @@ from ledger.injections import (
     BilbyParameterSet,
     InjectionParameterSet,
     InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
     RingdownWaveformPolarizationSet,
     RingdownWaveformSet,
     WaveformSet,
@@ -644,3 +645,191 @@ class TestRingdownWaveformSet:
 
         with pytest.raises(ValueError, match="Specified waveform duration"):
             type(ringdown_set)(**kwargs)
+
+
+RINGDOWN_RESPONSE_SET_FIELDS = [
+    "frequency",
+    "quality",
+    "epsilon",
+    "phase",
+    "inclination",
+    "distance",
+    "ra",
+    "dec",
+    "psi",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+    "sample_rate",
+    "duration",
+    "right_pad",
+    "num_injections",
+    "injection_time",
+    "shift",
+]
+
+
+class TestRingdownResponseSet:
+    """The ringdown counterpart of TestLigoResponseSet.
+
+    Only covers what the split has to preserve: the parameter schema, and
+    the four timing/injection methods now inherited from ResponseSetBase.
+    """
+
+    @pytest.fixture
+    def duration(self):
+        return 2
+
+    @pytest.fixture
+    def sample_rate(self):
+        return 128
+
+    @pytest.fixture
+    def ringdown_response_cls(self):
+        return waveform_class_factory(
+            ["h1", "l1"],
+            RingdownInterferometerResponseSet,
+            cls_name="LigoRingdownResponseSet",
+        )
+
+    @staticmethod
+    def build(cls, times, sample_rate, duration, shifts=None, frequency=None):
+        """A response set with a distinct constant waveform per detector.
+
+        h1 is filled with 1.0 and l1 with 2.0 so an injection test can tell
+        the channels apart and assert exact sample placement.
+        """
+        n = len(times)
+        size = int(duration * sample_rate)
+        kwargs = {}
+        for name, attr in cls.__dataclass_fields__.items():
+            kind = attr.metadata["kind"]
+            if kind == "parameter":
+                kwargs[name] = np.zeros((n,))
+            elif kind == "waveform":
+                kwargs[name] = np.zeros((n, size))
+
+        kwargs["injection_time"] = np.asarray(times, dtype=float)
+        if shifts is None:
+            shifts = np.repeat(np.array([[0.0, 1.0]]), n, axis=0)
+        kwargs["shift"] = np.asarray(shifts, dtype=float)
+        if frequency is not None:
+            kwargs["frequency"] = np.asarray(frequency, dtype=float)
+        kwargs["h1"] = np.ones((n, size))
+        kwargs["l1"] = 2 * np.ones((n, size))
+
+        return cls(
+            sample_rate=sample_rate,
+            duration=duration,
+            num_injections=n,
+            right_pad=duration / 2,
+            **kwargs,
+        )
+
+    @pytest.fixture
+    def response_set(self, ringdown_response_cls, duration, sample_rate):
+        return self.build(
+            ringdown_response_cls,
+            [10.0, 20.0, 30.0, 40.0],
+            sample_rate,
+            duration,
+            shifts=[[0.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
+            frequency=[200.0, 210.0, 220.0, 230.0],
+        )
+
+    def test_field_order(self, ringdown_response_cls):
+        assert list(ringdown_response_cls.__dataclass_fields__) == (
+            RINGDOWN_RESPONSE_SET_FIELDS + ["h1", "l1"]
+        )
+
+    def test_carries_no_cbc_parameters(self, ringdown_response_cls):
+        fields = set(ringdown_response_cls.__dataclass_fields__)
+        assert not fields & {"mass_1", "mass_2", "a_1", "theta_jn", "redshift"}
+
+    def test_get_shift(self, response_set):
+        shifted = response_set.get_shift(np.array([0.0, 1.0]))
+        assert len(shifted) == 2
+        np.testing.assert_array_equal(shifted.injection_time, [20.0, 40.0])
+        np.testing.assert_array_equal(shifted.frequency, [210.0, 230.0])
+
+    def test_get_times(self, response_set):
+        within = response_set.get_times(start=15.0, end=35.0)
+        np.testing.assert_array_equal(within.injection_time, [20.0, 30.0])
+
+    def test_read_round_trip_with_shifts(
+        self, response_set, ringdown_response_cls, tmp_path
+    ):
+        fname = tmp_path / "ringdown-response-set.hdf5"
+        response_set.write(fname)
+
+        loaded = ringdown_response_cls.read(fname)
+        assert len(loaded) == 4
+        np.testing.assert_array_equal(loaded.frequency, response_set.frequency)
+
+        sliced = ringdown_response_cls.read(fname, shifts=[0.0, 1.0])
+        assert len(sliced) == 2
+        np.testing.assert_array_equal(sliced.frequency, [210.0, 230.0])
+
+    def test_inject_writes_each_detector_at_the_expected_samples(
+        self, response_set, sample_rate
+    ):
+        """Assert placement, not merely that something was written.
+
+        A waveform spans `duration` seconds and is anchored so its first
+        sample lands `duration - right_pad` before the injection time. With
+        sample_rate=128, duration=2, right_pad=1 that puts an injection at
+        t=10 s in samples [10*128 - 128, +256) = [1152, 1408). The spans
+        below were confirmed by running `inject` against these inputs.
+        """
+        background = np.zeros((2, 60 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        spans = [(1152, 1408), (2432, 2688), (3712, 3968), (4992, 5248)]
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            marked = np.zeros(injected.shape[-1], dtype=bool)
+            for lo, hi in spans:
+                np.testing.assert_allclose(injected[channel, lo:hi], value)
+                marked[lo:hi] = True
+            # and nothing anywhere else
+            np.testing.assert_allclose(injected[channel, ~marked], 0.0)
+
+    def test_inject_trims_an_injection_that_precedes_the_chunk(
+        self, ringdown_response_cls, sample_rate, duration
+    ):
+        """An injection whose window opens before the chunk start.
+
+        `inject` pads the array, writes, then trims back. At t=0.5 s the
+        window opens at -0.5 s, so the leading 64 samples fall outside the
+        chunk and the remaining 192 land at the very start of the output.
+        """
+        response_set = self.build(
+            ringdown_response_cls, [0.5], sample_rate, duration
+        )
+        background = np.zeros((2, 10 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            np.testing.assert_allclose(injected[channel, :192], value)
+            np.testing.assert_allclose(injected[channel, 192:], 0.0)
+
+    def test_inject_trims_an_injection_that_overruns_the_chunk(
+        self, ringdown_response_cls, sample_rate, duration
+    ):
+        """The mirror case: at t=9.5 s in a 10 s chunk the window closes at
+        10.5 s, so the trailing 64 samples are cut and 192 land at the end.
+        """
+        response_set = self.build(
+            ringdown_response_cls, [9.5], sample_rate, duration
+        )
+        background = np.zeros((2, 10 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            np.testing.assert_allclose(injected[channel, 1088:], value)
+            np.testing.assert_allclose(injected[channel, :1088], 0.0)

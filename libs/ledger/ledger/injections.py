@@ -1059,6 +1059,16 @@ class InterferometerResponseSet(ResponseSetBase, WaveformSet):
     """
 
 
+@dataclass
+class RingdownInterferometerResponseSet(ResponseSetBase, RingdownWaveformSet):
+    """Ringdown waveforms projected onto specific interferometers.
+
+    The ringdown counterpart of `InterferometerResponseSet`: the same
+    injection times, shifts and `inject` behaviour, over the parameters
+    `ml4gw.waveforms.adhoc.Ringdown` consumes instead of the CBC ones.
+    """
+
+
 def waveform_class_factory(ifos: list[str], base_cls, cls_name: str):
     """
     Factory function for creating ledger
