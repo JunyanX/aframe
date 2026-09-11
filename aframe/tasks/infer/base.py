@@ -19,6 +19,11 @@ from aframe.tasks.data.condor.workflows import StaticMemoryWorkflow
 
 class InferParameters(law.Task):
     ifos = luigi.ListParameter()
+    waveform_type = luigi.ChoiceParameter(
+        default="cbc",
+        choices=("cbc", "ringdown"),
+        description="Family of the testing waveforms to run over",
+    )
     inference_sampling_rate = luigi.FloatParameter()
     batch_size = luigi.IntParameter()
     psd_length = luigi.FloatParameter()
@@ -218,6 +223,7 @@ class InferBase(
             shifts=shifts,
             background_fname=fname,
             injection_set_fname=self.injection_set_fname,
+            waveform_type=self.waveform_type,
         )
 
         postprocessor = Postprocessor(

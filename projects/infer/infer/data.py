@@ -8,8 +8,22 @@ import h5py
 import numpy as np
 from ratelimiter import RateLimiter
 
-from ledger.events import EventSet, RecoveredInjectionSet
-from ledger.injections import InterferometerResponseSet, waveform_class_factory
+from ledger.events import EventSet, get_recovered_cls
+from ledger.injections import (
+    InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
+    waveform_class_factory,
+)
+
+
+def response_set_cls_for(ifos, waveform_type):
+    """The response set class a campaign of this family was written with."""
+    base_cls = (
+        RingdownInterferometerResponseSet
+        if waveform_type == "ringdown"
+        else InterferometerResponseSet
+    )
+    return waveform_class_factory(ifos, base_cls, "ResponseSet")
 
 
 class Sequence:
@@ -22,6 +36,7 @@ class Sequence:
         inference_sampling_rate: float,
         batch_size: int,
         rate: Optional[float] = None,
+        waveform_type: str = "cbc",
     ):
         """
         Object used for iterating over a segment of data,
@@ -47,6 +62,9 @@ class Sequence:
                 Number of inference requests to send to the model at once
             rate:
                 Rate at which to send requests in Hz
+            waveform_type:
+                Family the injection set was generated from, which
+                selects the ledger classes used to read and recover it.
         """
         logging.info("Initializing sequence")
 
@@ -55,6 +73,7 @@ class Sequence:
         self.batch_size = batch_size
         self.rate = rate
         self.ifos = ifos
+        self.waveform_type = waveform_type
 
         if len(ifos) != len(shifts):
             raise ValueError(
@@ -75,11 +94,7 @@ class Sequence:
         # this shift, set it to None so
         # we don't run inference on injections
 
-        cls = waveform_class_factory(
-            ifos,
-            InterferometerResponseSet,
-            "ResponseSet",
-        )
+        cls = response_set_cls_for(ifos, waveform_type)
 
         injection_set = cls.read(
             injection_set_fname,
@@ -243,5 +258,6 @@ class Sequence:
                 foreground = self._sequences[self.id + 1][self.slice]
             return background, foreground
 
-    def recover(self, foreground: EventSet) -> RecoveredInjectionSet:
-        return RecoveredInjectionSet.recover(foreground, self.injection_set)
+    def recover(self, foreground: EventSet):
+        cls = get_recovered_cls(self.waveform_type)
+        return cls.recover(foreground, self.injection_set)

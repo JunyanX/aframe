@@ -233,7 +233,7 @@ class Infer(AframeSingularityTask):
     def run(self):
         import shutil
 
-        from ledger.events import EventSet, RecoveredInjectionSet
+        from ledger.events import EventSet, get_recovered_cls
 
         # separate 0lag and background events into different files
         background_lengths, foreground_lengths, shifts = self.get_metadata()
@@ -256,7 +256,8 @@ class Infer(AframeSingularityTask):
             length=background_length,
         )
         logging.info("Aggregating foreground files")
-        RecoveredInjectionSet.aggregate(
+        recovered_cls = get_recovered_cls(self.waveform_type)
+        recovered_cls.aggregate(
             self.foreground_files[foreground_mask],
             self.foreground_output,
             clean=False,
