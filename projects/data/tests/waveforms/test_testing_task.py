@@ -260,3 +260,253 @@ def test_generator_end_to_end_still_writes_a_cbc_campaign(
 
     rejected = InjectionParameterSet.read(rejected_fname)
     assert hasattr(rejected, "mass_1")
+
+
+def make_ringdown_response_parameters(size, offset=0):
+    """The dict shape a ringdown `testing_waveforms` branch writes."""
+    values = np.arange(offset, offset + size, dtype=float)
+    parameters = {
+        "frequency": 200 + values,
+        "quality": 10 + values,
+        "epsilon": 0.01 + values,
+        "phase": 0.1 + values,
+        "inclination": 0.2 + values,
+        "distance": 100 + values,
+        "ra": 0.3 + values,
+        "dec": 0.4 + values,
+        "psi": 0.5 + values,
+        "snr": 8 + values,
+        "ifo_snrs": np.repeat((6 + values)[:, None], len(IFOS), axis=1),
+        "ifos": IFOS,
+        "injection_time": 1000 + values,
+        "shift": np.repeat(np.array([[0.0, 1.0]]), size, axis=0),
+        "sample_rate": SAMPLE_RATE,
+        "duration": DURATION,
+        "right_pad": RIGHT_PAD,
+        "num_injections": size,
+    }
+    for i, ifo in enumerate(IFOS):
+        parameters[ifo.lower()] = np.repeat(
+            (values + i)[:, None], WAVEFORM_SIZE, axis=1
+        )
+    return parameters
+
+
+def make_rejected(cls, size, offset=0, base=0.0):
+    """A rejected-parameter ledger of either family.
+
+    Built from the dataclass fields so the CBC and ringdown schemas share one
+    helper. `size=0` gives the empty ledger `rejection_sample` writes when a
+    branch rejects nothing.
+    """
+    values = base + np.arange(offset, offset + size, dtype=float)
+    kwargs = {}
+    for name, attr in cls.__dataclass_fields__.items():
+        if attr.metadata["kind"] == "parameter":
+            kwargs[name] = values.copy()
+    kwargs["ifo_snrs"] = np.repeat(values[:, None], len(IFOS), axis=1)
+    kwargs["ifos"] = IFOS
+    return cls(**kwargs)
+
+
+def make_response_parameters(cls, size, offset=0):
+    """The dict shape a `testing_waveforms` branch writes, for either family.
+
+    The CBC parameter list is long and this test only cares that the merge
+    keeps every field, so build from the dataclass rather than hardcoding a
+    schema.
+    """
+    values = np.arange(offset, offset + size, dtype=float)
+    parameters = {}
+    for name, attr in cls.__dataclass_fields__.items():
+        kind = attr.metadata["kind"]
+        if kind == "parameter":
+            parameters[name] = values.copy()
+        elif kind == "waveform":
+            parameters[name] = np.repeat(
+                values[:, None], WAVEFORM_SIZE, axis=1
+            )
+    parameters["ifo_snrs"] = np.repeat(values[:, None], len(IFOS), axis=1)
+    parameters["shift"] = np.repeat(np.array([[0.0, 1.0]]), size, axis=0)
+    parameters["injection_time"] = 1000 + values
+    parameters["ifos"] = IFOS
+    parameters["sample_rate"] = SAMPLE_RATE
+    parameters["duration"] = DURATION
+    parameters["right_pad"] = RIGHT_PAD
+    parameters["num_injections"] = size
+    return parameters
+
+
+def test_rejected_class_selection():
+    assert (
+        testing_tasks._get_rejected_cls("ringdown")
+        is RingdownInjectionParameterSet
+    )
+    assert testing_tasks._get_rejected_cls("cbc") is InjectionParameterSet
+
+
+def test_testing_aggregates_ringdown_campaign(tmp_path, monkeypatch):
+    task = make_task(
+        testing_tasks.TestingWaveforms,
+        tmp_path,
+        num_signals=3,
+        waveform_type="ringdown",
+    )
+    task.output_dir.mkdir(parents=True)
+
+    response_cls = testing_tasks._get_response_set_cls(
+        IFOS, "ringdown", "ResponseSet"
+    )
+    waveform_files, rejected_files = [], []
+    for branch, (size, offset) in enumerate([(2, 0), (1, 2)]):
+        branch_dir = task.output_dir / f"tmp-{branch}"
+        branch_dir.mkdir()
+
+        waveform_file = branch_dir / "waveforms.hdf5"
+        response_cls(**make_ringdown_response_parameters(size, offset)).write(
+            waveform_file
+        )
+        waveform_files.append(waveform_file)
+
+        rejected_file = branch_dir / "rejected-parameters.hdf5"
+        make_rejected(
+            RingdownInjectionParameterSet, size, offset, base=200
+        ).write(rejected_file)
+        rejected_files.append(rejected_file)
+
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "waveform_files",
+        property(lambda _: waveform_files),
+    )
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "rejected_parameter_files",
+        property(lambda _: rejected_files),
+    )
+
+    testing_tasks.TestingWaveforms.run(task)
+
+    merged = response_cls.read(task.waveform_output)
+    assert len(merged) == 3
+    np.testing.assert_array_equal(merged.frequency, [200, 201, 202])
+    np.testing.assert_array_equal(merged.injection_time, [1000, 1001, 1002])
+    assert merged.waveforms.shape == (3, len(IFOS), WAVEFORM_SIZE)
+
+    rejected = RingdownInjectionParameterSet.read(task.rejected_output)
+    assert len(rejected) == 3
+    np.testing.assert_array_equal(rejected.frequency, [200, 201, 202])
+
+    # the per-branch scratch directories are cleaned up
+    assert not list(task.output_dir.glob("tmp-*"))
+
+
+def test_testing_aggregates_cbc_campaign(tmp_path, monkeypatch):
+    """The default path must keep working, unchanged.
+
+    Task 5 rewrites the body of `TestingWaveforms.run`; this pins the CBC
+    behaviour it has to preserve.
+    """
+    task = make_task(testing_tasks.TestingWaveforms, tmp_path, num_signals=3)
+    task.output_dir.mkdir(parents=True)
+
+    response_cls = testing_tasks._get_response_set_cls(
+        IFOS, "cbc", "ResponseSet"
+    )
+    waveform_files, rejected_files = [], []
+    for branch, (size, offset) in enumerate([(2, 0), (1, 2)]):
+        branch_dir = task.output_dir / f"tmp-{branch}"
+        branch_dir.mkdir()
+
+        waveform_file = branch_dir / "waveforms.hdf5"
+        response_cls(
+            **make_response_parameters(response_cls, size, offset)
+        ).write(waveform_file)
+        waveform_files.append(waveform_file)
+
+        rejected_file = branch_dir / "rejected-parameters.hdf5"
+        make_rejected(InjectionParameterSet, size, offset).write(rejected_file)
+        rejected_files.append(rejected_file)
+
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "waveform_files",
+        property(lambda _: waveform_files),
+    )
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "rejected_parameter_files",
+        property(lambda _: rejected_files),
+    )
+
+    testing_tasks.TestingWaveforms.run(task)
+
+    merged = response_cls.read(task.waveform_output)
+    assert len(merged) == 3
+    np.testing.assert_array_equal(merged.mass_1, [0, 1, 2])
+    np.testing.assert_array_equal(merged.injection_time, [1000, 1001, 1002])
+    assert merged.waveforms.shape == (3, len(IFOS), WAVEFORM_SIZE)
+
+    rejected = InjectionParameterSet.read(task.rejected_output)
+    assert len(rejected) == 3
+    assert not list(task.output_dir.glob("tmp-*"))
+
+
+def test_aggregates_a_branch_that_rejected_nothing(tmp_path, monkeypatch):
+    """A branch can reject nothing and still write the file.
+
+    `rejection_sample` initialises `rejected_params = rejected_cls()` and
+    writes it unconditionally, so an empty member reaches the merge whenever
+    a branch's first pass clears the SNR threshold outright.
+    """
+    task = make_task(
+        testing_tasks.TestingWaveforms,
+        tmp_path,
+        num_signals=3,
+        waveform_type="ringdown",
+    )
+    task.output_dir.mkdir(parents=True)
+
+    response_cls = testing_tasks._get_response_set_cls(
+        IFOS, "ringdown", "ResponseSet"
+    )
+    waveform_files, rejected_files = [], []
+    # branch 1 rejected nothing
+    for branch, (size, offset, num_rejected) in enumerate(
+        [(2, 0, 2), (1, 2, 0)]
+    ):
+        branch_dir = task.output_dir / f"tmp-{branch}"
+        branch_dir.mkdir()
+
+        waveform_file = branch_dir / "waveforms.hdf5"
+        response_cls(**make_ringdown_response_parameters(size, offset)).write(
+            waveform_file
+        )
+        waveform_files.append(waveform_file)
+
+        rejected_file = branch_dir / "rejected-parameters.hdf5"
+        make_rejected(
+            RingdownInjectionParameterSet, num_rejected, offset, base=200
+        ).write(rejected_file)
+        rejected_files.append(rejected_file)
+
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "waveform_files",
+        property(lambda _: waveform_files),
+    )
+    monkeypatch.setattr(
+        testing_tasks.TestingWaveforms,
+        "rejected_parameter_files",
+        property(lambda _: rejected_files),
+    )
+
+    testing_tasks.TestingWaveforms.run(task)
+
+    merged = response_cls.read(task.waveform_output)
+    assert len(merged) == 3
+
+    # only the first branch contributed rejections
+    rejected = RingdownInjectionParameterSet.read(task.rejected_output)
+    assert len(rejected) == 2
+    np.testing.assert_array_equal(rejected.frequency, [200, 201])

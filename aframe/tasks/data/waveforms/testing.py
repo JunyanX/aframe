@@ -32,6 +32,17 @@ def _get_response_set_cls(ifos, waveform_type, cls_name):
     return waveform_class_factory(ifos, base_cls, cls_name)
 
 
+def _get_rejected_cls(waveform_type):
+    from ledger.injections import (
+        InjectionParameterSet,
+        RingdownInjectionParameterSet,
+    )
+
+    if waveform_type == "ringdown":
+        return RingdownInjectionParameterSet
+    return InjectionParameterSet
+
+
 class TestingWaveformsParams(WaveformParams):
     waveform_type = luigi.ChoiceParameter(
         default="cbc",
@@ -261,20 +272,13 @@ class TestingWaveforms(AframeDataTask):
         return list(map(Path, [targets[1].path for targets in self.targets]))
 
     def run(self):
-        from ledger.injections import (
-            InjectionParameterSet,
-            InterferometerResponseSet,
-            waveform_class_factory,
+        cls = _get_response_set_cls(
+            self.ifos, self.waveform_type, "ResponseSet"
         )
-
-        cls = waveform_class_factory(
-            self.ifos,
-            InterferometerResponseSet,
-            "ResponseSet",
-        )
+        rejected_cls = _get_rejected_cls(self.waveform_type)
 
         cls.aggregate(self.waveform_files, self.waveform_output, clean=True)
-        InjectionParameterSet.aggregate(
+        rejected_cls.aggregate(
             self.rejected_parameter_files, self.rejected_output, clean=True
         )
         # clean up temporary directories
