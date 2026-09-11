@@ -17,7 +17,27 @@ from utils import data as data_utils
 TsWorkflowRequires = Dict[Literal["test_segments"], law.Task]
 
 
+def _get_response_set_cls(ifos, waveform_type, cls_name):
+    from ledger.injections import (
+        InterferometerResponseSet,
+        RingdownInterferometerResponseSet,
+        waveform_class_factory,
+    )
+
+    base_cls = (
+        RingdownInterferometerResponseSet
+        if waveform_type == "ringdown"
+        else InterferometerResponseSet
+    )
+    return waveform_class_factory(ifos, base_cls, cls_name)
+
+
 class TestingWaveformsParams(WaveformParams):
+    waveform_type = luigi.ChoiceParameter(
+        default="cbc",
+        choices=("cbc", "ringdown"),
+        description="Type of testing waveform to generate",
+    )
     start = luigi.FloatParameter(
         description="Start time of the test data segments to query"
     )
@@ -193,6 +213,7 @@ class DeployTestingWaveforms(
                 sample_rate=self.sample_rate,
                 waveform_duration=self.waveform_duration,
                 waveform_approximant=self.waveform_approximant,
+                waveform_type=self.waveform_type,
                 right_pad=self.right_pad,
                 highpass=self.highpass,
                 lowpass=self.lowpass,
