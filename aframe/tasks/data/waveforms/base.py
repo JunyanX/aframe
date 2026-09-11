@@ -32,7 +32,8 @@ class WaveformParams(law.Task):
     right_pad = luigi.FloatParameter(
         description="Location of the defining point of the signal "
         "within the generated waveform relative to the right edge "
-        "of the waveform (in seconds)",
+        "of the waveform (in seconds). For a ringdown, whose defining "
+        "point is its onset, this is the length of the ringdown itself",
     )
 
 

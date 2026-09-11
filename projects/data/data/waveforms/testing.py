@@ -104,6 +104,9 @@ def testing_waveforms(
             Scale of random jitter to add to injection times
         seed:
             Random seed to use for reproducibility
+        waveform_type:
+            Family to draw from, which selects both the generator and
+            the ledger classes written out. Defaults to ``"cbc"``.
 
     Returns:
         The name of the waveform file and the name of the file containing the
