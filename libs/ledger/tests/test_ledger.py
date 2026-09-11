@@ -307,3 +307,36 @@ def test_aggregate_of_empty_sets_missing_metadata(tmp_path):
 
     merged = RecoveredInjectionSet.read(merged_file)
     assert len(merged) == 0
+
+
+def test_aggregate_raises_when_a_populated_source_omits_metadata(tmp_path):
+    """Only an *empty* source is allowed to omit metadata.
+
+    The skip above is gated on `source_length == 0` deliberately. Ungated,
+    a populated source missing `duration` would inherit whatever the
+    previous source declared, silently attributing one campaign's metadata
+    to another's rows. Raising is the intended behaviour, so guard it.
+    """
+    values = np.arange(2, dtype=float)
+    kwargs = {
+        name: values.copy()
+        for name, attr in RecoveredInjectionSet.__dataclass_fields__.items()
+        if attr.metadata["kind"] == "parameter"
+    }
+    kwargs["ifo_snrs"] = np.repeat(values[:, None], len(IFOS), axis=1)
+    kwargs["ifos"] = IFOS
+    kwargs["num_injections"] = 2
+    # __post_init__ validates sample_rate but not duration or right_pad,
+    # so those stay None and are left off the file on write
+    kwargs["sample_rate"] = 128
+
+    files = []
+    for i in range(2):
+        fname = tmp_path / f"populated-{i}.hdf5"
+        RecoveredInjectionSet(**kwargs).write(fname)
+        files.append(fname)
+
+    with pytest.raises(KeyError, match="duration"):
+        RecoveredInjectionSet.aggregate(
+            files, tmp_path / "populated-merged.hdf5", clean=False
+        )
