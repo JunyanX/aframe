@@ -42,17 +42,16 @@ TRAIN_CONFIGS = {
     "ringdown": root / "projects" / "train" / "configs" / "ringdown.yaml",
 }
 
-# law target the generated run.sh invokes. Ringdown stops at Train because
-# inference, recovery and sensitivity analysis still hardcode the CBC
-# classes, so the rest of the sandbox pipeline can't run against ringdown
-# signals. TestingWaveforms does now generate ringdowns, but it is not on
-# the way to Train, so the run.sh gets it as a second, commented command
-# rather than as the target.
+# law target the generated run.sh invokes. Ringdown stops at SandboxInfer
+# rather than Sandbox because SensitiveVolume weights injections to a
+# target mass population, which has no ringdown analogue until someone
+# decides what the figure of merit should be. SandboxInfer requires
+# ExportLocal and TestingWaveforms itself, so naming it is enough.
 RUN_TARGETS = {
     "sandbox": "aframe.pipelines.sandbox.Sandbox",
     "review": "aframe.pipelines.sandbox.Sandbox",
     "tune": "aframe.pipelines.sandbox.Tune",
-    "ringdown": "aframe.tasks.Train",
+    "ringdown": "aframe.pipelines.sandbox.SandboxInfer",
 }
 
 ONLINE_CONFIGS = [
@@ -242,10 +241,6 @@ def create_offline_runfile(
     cmd = f"LAW_CONFIG_FILE={config} uv run --directory {root} "
     cmd += f"law run {target} "
     cmd += "--workers 5 --gpus 0"
-    if pipeline == "ringdown":
-        # keep the indent: write_content dedents by the common prefix
-        alt = cmd.replace(target, "aframe.tasks.TestingWaveforms")
-        cmd += f"\n\n    # testing waveforms, run separately:\n    # {alt}"
     content = f"""
     #!/bin/bash
     # Export environment variables
