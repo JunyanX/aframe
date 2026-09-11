@@ -2,6 +2,7 @@ import sys
 from types import ModuleType
 from unittest.mock import Mock
 
+import h5py
 import numpy as np
 import pytest
 import torch
@@ -51,6 +52,26 @@ def flat_psd(sample_rate, duration, num_ifos=NUM_IFOS):
     """
     num_freqs = int(sample_rate * duration) // 2 + 1
     return 1e-46 * torch.ones((num_ifos, num_freqs), dtype=torch.float64)
+
+
+def rejected_columns(fname):
+    """The parameter columns a rejected-parameters file actually holds.
+
+    Read from the file, not from an object: whichever class you read with
+    supplies its own field names, so an object can never tell you which
+    family did the writing.
+    """
+    with h5py.File(fname, "r") as f:
+        return set(f["parameters"].keys())
+
+
+def parameter_fields(cls):
+    """The parameter columns `cls` writes."""
+    return {
+        name
+        for name, attr in cls.__dataclass_fields__.items()
+        if attr.metadata["kind"] == "parameter"
+    }
 
 
 def make_task(task_cls, tmp_path, **kwargs):
@@ -227,10 +248,13 @@ def test_generator_end_to_end_writes_a_ringdown_campaign(
     assert "mass_1" not in cls.__dataclass_fields__
 
     # the rejected file is the ringdown class too. Do NOT assert a count:
-    # the number of rejections varies run to run.
-    rejected = RingdownInjectionParameterSet.read(rejected_fname)
-    assert hasattr(rejected, "frequency")
-    assert len(rejected) >= 0
+    # the number of rejections varies run to run. Inspect the file rather
+    # than the object: which columns were written is the thing under test,
+    # and reading it back can only ever show the class's own fields.
+    RingdownInjectionParameterSet.read(rejected_fname)
+    assert rejected_columns(rejected_fname) == parameter_fields(
+        RingdownInjectionParameterSet
+    )
 
 
 def test_generator_end_to_end_still_writes_a_cbc_campaign(
@@ -258,8 +282,10 @@ def test_generator_end_to_end_still_writes_a_cbc_campaign(
     assert (loaded.mass_1 > 0).all()
     assert "frequency" not in cls.__dataclass_fields__
 
-    rejected = InjectionParameterSet.read(rejected_fname)
-    assert hasattr(rejected, "mass_1")
+    InjectionParameterSet.read(rejected_fname)
+    assert rejected_columns(rejected_fname) == parameter_fields(
+        InjectionParameterSet
+    )
 
 
 def make_ringdown_response_parameters(size, offset=0):
