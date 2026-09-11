@@ -378,7 +378,7 @@ class Ledger:
             idx = 0
             for source in tqdm(_iter_open(files, "r", clean=clean)):
                 source_length = source.attrs["length"]
-                if source_length == 0:
+                if source_length == 0 and length:
                     continue
                 # for each dataset in the ledger, move the data
                 # from the source into the correct spot in the target
@@ -402,6 +402,10 @@ class Ledger:
                         else:
                             ours = target.attrs[key]
 
+                        if source_length == 0 and key not in source.attrs:
+                            # an empty ledger omits metadata whose value
+                            # is None; a populated one still must not
+                            continue
                         theirs = source.attrs[key]
                         value = cls.compare_metadata(key, ours, theirs)
                         target.attrs[key] = value
@@ -437,8 +441,9 @@ class Ledger:
 
                         # now write the source data directly to
                         # the corresponding rows in the target
-                        sel = np.s_[idx : idx + source_length]
-                        dataset.write_direct(theirs, dest_sel=sel)
+                        if source_length:
+                            sel = np.s_[idx : idx + source_length]
+                            dataset.write_direct(theirs, dest_sel=sel)
 
                 # advance the corresponding row index
                 idx += source_length

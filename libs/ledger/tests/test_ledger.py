@@ -5,6 +5,11 @@ import numpy as np
 import pytest
 
 from ledger import ledger
+from ledger.events import RecoveredInjectionSet
+from ledger.injections import (
+    InjectionParameterSet,
+    RingdownInjectionParameterSet,
+)
 
 
 class TestInjectionSet:
@@ -182,3 +187,123 @@ class TestInjectionSet:
         assert (obj.ids == np.array([3, 2, 1])).all()
         assert obj.is_sorted_by("age")
         assert not obj.is_sorted_by("ids")
+
+
+IFOS = ["H1", "L1"]
+EMPTY_SET_CLASSES = [InjectionParameterSet, RingdownInjectionParameterSet]
+
+
+def _populated(cls, n):
+    values = np.arange(n, dtype=float)
+    kwargs = {
+        name: values.copy()
+        for name, attr in cls.__dataclass_fields__.items()
+        if attr.metadata["kind"] == "parameter"
+    }
+    kwargs["ifo_snrs"] = np.repeat(values[:, None], len(IFOS), axis=1)
+    kwargs["ifos"] = IFOS
+    return cls(**kwargs)
+
+
+def _empty_2d(cls):
+    """An empty ledger whose ifo_snrs keeps its second dimension."""
+    kwargs = {
+        name: np.array([])
+        for name, attr in cls.__dataclass_fields__.items()
+        if attr.metadata["kind"] == "parameter"
+    }
+    kwargs["ifo_snrs"] = np.empty((0, len(IFOS)))
+    kwargs["ifos"] = IFOS
+    return cls(**kwargs)
+
+
+@pytest.mark.parametrize("cls", EMPTY_SET_CLASSES)
+def test_aggregate_of_only_empty_sources_stays_readable(cls, tmp_path):
+    """Every input empty must still yield a valid, readable ledger.
+
+    `rejection_sample` writes `rejected_cls()` for a branch that rejects
+    nothing, so `TestingWaveforms` reaches this whenever no branch rejects.
+    """
+    files = []
+    for i in range(2):
+        fname = tmp_path / f"empty-{i}.hdf5"
+        cls().write(fname)
+        files.append(fname)
+
+    merged_file = tmp_path / "merged.hdf5"
+    cls.aggregate(files, merged_file, clean=False)
+
+    merged = cls.read(merged_file)
+    assert len(merged) == 0
+    for name, attr in cls.__dataclass_fields__.items():
+        if attr.metadata["kind"] == "parameter":
+            assert len(getattr(merged, name)) == 0
+
+
+@pytest.mark.parametrize("cls", EMPTY_SET_CLASSES)
+def test_aggregate_of_only_empty_sources_keeps_dimensions(cls, tmp_path):
+    """A 2-D parameter stays 2-D through an all-empty merge.
+
+    `ifo_snrs` is (n_injections, n_ifos). A default `cls()` leaves it (0,),
+    but a caller that builds it explicitly gets (0, n_ifos), and the merge
+    must not flatten that.
+    """
+    files = []
+    for i in range(2):
+        fname = tmp_path / f"empty2d-{i}.hdf5"
+        _empty_2d(cls).write(fname)
+        files.append(fname)
+
+    merged_file = tmp_path / "merged2d.hdf5"
+    cls.aggregate(files, merged_file, clean=False)
+
+    merged = cls.read(merged_file)
+    assert len(merged) == 0
+    assert merged.ifo_snrs.shape == (0, len(IFOS))
+    assert list(merged.ifos) == IFOS
+
+
+@pytest.mark.parametrize("cls", EMPTY_SET_CLASSES)
+@pytest.mark.parametrize("empty_first", [True, False])
+def test_aggregate_mixes_a_default_empty_with_populated(
+    cls, empty_first, tmp_path
+):
+    """Regression guard: a default `cls()` beside real rows, either order.
+
+    A default empty has `ifo_snrs` of shape (0,) while a populated set has
+    (n, 2). If the empty one is allowed to create the dataset it fixes it at
+    one dimension and the populated write fails to broadcast. Both orders
+    work today and must keep working.
+    """
+    empty_file = tmp_path / "empty.hdf5"
+    cls().write(empty_file)
+    full_file = tmp_path / "full.hdf5"
+    _populated(cls, 2).write(full_file)
+
+    files = [empty_file, full_file] if empty_first else [full_file, empty_file]
+    merged_file = tmp_path / "mixed.hdf5"
+    cls.aggregate(files, merged_file, clean=False)
+
+    merged = cls.read(merged_file)
+    assert len(merged) == 2
+    assert merged.ifo_snrs.shape == (2, len(IFOS))
+
+
+def test_aggregate_of_empty_sets_missing_metadata(tmp_path):
+    """A source may omit metadata whose value is None.
+
+    `RecoveredInjectionSet()` writes no `sample_rate`, `duration` or
+    `right_pad` attribute. Merging such a source must skip what is absent
+    rather than raising `KeyError`.
+    """
+    files = []
+    for i in range(2):
+        fname = tmp_path / f"recovered-{i}.hdf5"
+        RecoveredInjectionSet().write(fname)
+        files.append(fname)
+
+    merged_file = tmp_path / "recovered-merged.hdf5"
+    RecoveredInjectionSet.aggregate(files, merged_file, clean=False)
+
+    merged = RecoveredInjectionSet.read(merged_file)
+    assert len(merged) == 0
