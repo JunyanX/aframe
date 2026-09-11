@@ -6,6 +6,7 @@ import pytest
 from ledger.injections import (
     BilbyParameterSet,
     InjectionParameterSet,
+    InterferometerResponseSet,
     RingdownWaveformPolarizationSet,
     RingdownWaveformSet,
     WaveformSet,
@@ -428,6 +429,52 @@ CBC_INJECTION_FIELDS = [
 def test_snr_mixin_preserves_cbc_field_order():
     fields = list(InjectionParameterSet.__dataclass_fields__)
     assert fields == CBC_INJECTION_FIELDS
+
+
+CBC_RESPONSE_SET_FIELDS = [
+    "mass_1",
+    "mass_2",
+    "a_1",
+    "a_2",
+    "tilt_1",
+    "tilt_2",
+    "phi_12",
+    "phi_jl",
+    "ra",
+    "dec",
+    "redshift",
+    "psi",
+    "theta_jn",
+    "phase",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+    "sample_rate",
+    "duration",
+    "right_pad",
+    "num_injections",
+    "injection_time",
+    "shift",
+]
+
+
+def test_response_set_field_order_is_stable():
+    """Splitting the timing behaviour out must not reorder the fields.
+
+    Ledger reads and writes by name, but `RecoveredInjectionSet`
+    (ledger/events.py:240) mixes this class with `EventSet`, and the
+    dataclass MRO decides the field order that both of them see.
+    """
+    assert (
+        list(InterferometerResponseSet.__dataclass_fields__)
+        == CBC_RESPONSE_SET_FIELDS
+    )
+
+
+def test_response_set_factory_appends_ifo_fields(response_set_cls):
+    assert list(response_set_cls.__dataclass_fields__) == (
+        CBC_RESPONSE_SET_FIELDS + ["h1", "l1"]
+    )
 
 
 def test_mismatched_waveform_classes_fail_loudly(tmp_path):

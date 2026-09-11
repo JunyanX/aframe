@@ -828,18 +828,14 @@ class RingdownWaveformSet(WaveformSetBase, RingdownInjectionParameterSet):
     """
 
 
-# TODO: rename this to InjectionCampaign
 @dataclass
-class InterferometerResponseSet(WaveformSet):
-    """Waveforms projected onto specific interferometers.
+class ResponseSetBase(WaveformSetBase):
+    """Injection timing and strain injection, independent of the parameters.
 
-    Represents a set of projected waveforms to be used in an injection
-    campaign, along with the times and shifts for each injection.
-
-    Note:
-        Dataclass inheritance order (last to first) determines field ordering:
-        mass1, mass2, ..., ra, dec, psi, injection_time, shift, sample_rate,
-        h1, l1
+    The counterpart of `WaveformSetBase` for waveforms that have been placed
+    into a timeseries. It holds when each injection happens and how the
+    detectors were shifted, plus every method that needs only those, so that
+    CBC and ringdown response sets share one implementation.
     """
 
     injection_time: np.ndarray = parameter()
@@ -1045,6 +1041,22 @@ class InterferometerResponseSet(WaveformSet):
             stop = -stop or None
             x = x[:, start:stop]
         return x
+
+
+# TODO: rename this to InjectionCampaign
+@dataclass
+class InterferometerResponseSet(ResponseSetBase, WaveformSet):
+    """CBC waveforms projected onto specific interferometers.
+
+    Represents a set of projected waveforms to be used in an injection
+    campaign, along with the times and shifts for each injection.
+
+    Note:
+        Dataclass inheritance order (last to first) determines field
+        ordering: mass_1, mass_2, ..., ra, dec, psi, snr, ifo_snrs, ifos,
+        sample_rate, duration, right_pad, num_injections, injection_time,
+        shift, then one field per interferometer.
+    """
 
 
 def waveform_class_factory(ifos: list[str], base_cls, cls_name: str):
