@@ -15,8 +15,16 @@ from pycbc.waveform import get_td_waveform
 from ledger.ledger import PATH, Ledger, metadata, parameter, waveform
 from utils.cosmology import DEFAULT_COSMOLOGY
 
+# Physical constants, copied verbatim from ml4gw/constants.py so that the
+# remnant mass below is the exact inverse of the transform
+# ml4gw/waveforms/adhoc/ringdown.py:79-84 used to generate the waveform.
+# projects/data/tests/waveforms/test_ringdown.py pins them to ml4gw's.
 # Solar mass in kg
 MSUN = 1.988409902147041637325262574352366540e30
+# Newton's constant in m^3 / kg / s^2
+G = 6.67430e-11
+# Speed of light in m / s
+C = 299792458.0
 
 
 def chirp_mass(
@@ -257,6 +265,58 @@ class RingdownParameterSet(Ledger):
     ra: np.ndarray = parameter()
     dec: np.ndarray = parameter()
     psi: np.ndarray = parameter()
+
+    @property
+    def remnant_spin(self):
+        """Dimensionless remnant spin, inverted from the quality factor.
+
+        The inverse of the Echeverria/Finn fit ml4gw applies in
+        `ml4gw/waveforms/adhoc/ringdown.py:79`.
+        """
+        return 1 - (2 / self.quality) ** (20 / 9)
+
+    @property
+    def remnant_mass(self):
+        """Remnant mass in solar masses, detector frame.
+
+        The inverse of `ml4gw/waveforms/adhoc/ringdown.py:80-84`, converted
+        from kg. Detector frame because `ringdown_prior` samples frequency
+        in the detector frame (`detector_frame_prior = True`).
+        """
+        return (
+            (1 / (2 * np.pi))
+            * (C**3 / (G * self.frequency))
+            * (1 - 0.63 * (2 / self.quality) ** (2 / 3))
+            / MSUN
+        )
+
+    @property
+    def redshift(self):
+        """Redshift implied by the sampled luminosity distance.
+
+        Uses DEFAULT_COSMOLOGY. A property takes no arguments, so this is
+        deliberately not caller-configurable; the cosmology parameter on
+        `LALParameterSet.redshift` is unreachable and is not copied here.
+        Not cached: `Ledger.append` replaces the field arrays without
+        clearing caches, so a cached value would go stale and change shape.
+        Guarded for an empty ledger: `z_at_value` raises on a zero-sized
+        input, but an empty rejection ledger is a supported pipeline state
+        (`rejection_sample` writes one whenever a branch rejects nothing).
+        """
+        if self.distance.size == 0:
+            return np.array([], dtype=np.float64)
+        return z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, self.distance * Mpc
+        ).value
+
+    @property
+    def remnant_mass_source(self):
+        """Remnant mass in solar masses, source frame.
+
+        The quantity CBC's sensitive volume bins on
+        (`projects/plots/plots/legacy/main.py:104-108`).
+        """
+        return self.remnant_mass / (1 + self.redshift)
 
 
 @dataclass

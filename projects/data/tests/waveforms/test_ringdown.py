@@ -151,3 +151,15 @@ def test_generate_ringdown_rejects_invalid_generation_settings(
             waveform_duration=waveform_duration,
             right_pad=right_pad,
         )
+
+
+def test_ledger_constants_match_ml4gw():
+    from ml4gw.constants import C as ML4GW_C
+    from ml4gw.constants import G as ML4GW_G
+    from ml4gw.constants import MSUN as ML4GW_MSUN
+
+    from ledger.injections import C, G, MSUN
+
+    assert C == ML4GW_C
+    assert G == ML4GW_G
+    assert MSUN == ML4GW_MSUN

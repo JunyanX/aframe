@@ -833,3 +833,120 @@ class TestRingdownResponseSet:
         for channel, value in ((0, 1.0), (1, 2.0)):
             np.testing.assert_allclose(injected[channel, 1088:], value)
             np.testing.assert_allclose(injected[channel, :1088], 0.0)
+
+
+class TestRingdownRemnantProperties:
+    @pytest.fixture
+    def params(self):
+        from ledger.injections import RingdownParameterSet
+
+        n = 3
+        return RingdownParameterSet(
+            frequency=np.array([150.0, 300.0, 600.0]),
+            quality=np.array([10.0, 14.0, 18.0]),
+            epsilon=np.full(n, 0.05),
+            phase=np.zeros(n),
+            inclination=np.zeros(n),
+            distance=np.array([100.0, 500.0, 1000.0]),
+            ra=np.zeros(n),
+            dec=np.zeros(n),
+            psi=np.zeros(n),
+        )
+
+    def test_remnant_spin_matches_closed_form(self, params):
+        expected = 1 - (2 / params.quality) ** (20 / 9)
+        np.testing.assert_allclose(params.remnant_spin, expected, rtol=1e-12)
+
+    def test_remnant_mass_known_values(self, params):
+        # ml4gw ringdown.py:79-84 inverted, converted to Msun
+        np.testing.assert_allclose(
+            params.remnant_mass,
+            np.array([169.0, 89.16, 46.01]),
+            rtol=1e-3,
+        )
+
+    def test_roundtrip_mass_spin_to_frequency_quality(self, params):
+        from ledger.injections import C, G, MSUN
+
+        m, chi = params.remnant_mass, params.remnant_spin
+        q = 2 * (1 - chi) ** -0.45
+        f = (
+            (1 / (2 * np.pi))
+            * (C**3 / (G * m * MSUN))
+            * (1 - 0.63 * (1 - chi) ** 0.3)
+        )
+        np.testing.assert_allclose(q, params.quality, rtol=1e-10)
+        np.testing.assert_allclose(f, params.frequency, rtol=1e-10)
+
+    def test_redshift_from_distance(self, params):
+        from astropy.units import Mpc
+
+        from utils.cosmology import DEFAULT_COSMOLOGY
+        from astropy.cosmology import z_at_value
+
+        expected = z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, params.distance * Mpc
+        ).value
+        np.testing.assert_allclose(params.redshift, expected, rtol=1e-12)
+
+    def test_source_frame_is_detector_over_one_plus_z(self, params):
+        np.testing.assert_allclose(
+            params.remnant_mass_source,
+            params.remnant_mass / (1 + params.redshift),
+            rtol=1e-12,
+        )
+
+    def test_properties_are_not_cached(self, params):
+        first = params.redshift.copy()
+        params.distance = np.array([1000.0, 1000.0, 1000.0])
+        second = params.redshift
+        assert not np.allclose(first, second)
+        assert second.shape == params.distance.shape
+
+    def test_properties_survive_append(self, params):
+        from ledger.injections import RingdownParameterSet
+
+        _ = params.remnant_mass_source  # force one evaluation first
+        params.append(
+            RingdownParameterSet(
+                frequency=np.array([200.0]),
+                quality=np.array([12.0]),
+                epsilon=np.array([0.05]),
+                phase=np.array([0.0]),
+                inclination=np.array([0.0]),
+                distance=np.array([300.0]),
+                ra=np.array([0.0]),
+                dec=np.array([0.0]),
+                psi=np.array([0.0]),
+            )
+        )
+        assert len(params.remnant_mass_source) == 4
+        assert len(params.redshift) == 4
+
+    def test_redshift_empty_ledger(self):
+        from ledger.injections import RingdownParameterSet
+
+        empty = RingdownParameterSet()
+        redshift = empty.redshift
+        assert redshift.shape == (0,)
+        assert redshift.dtype == np.float64
+
+    def test_remnant_mass_source_empty_ledger(self):
+        from ledger.injections import RingdownParameterSet
+
+        empty = RingdownParameterSet()
+        remnant_mass_source = empty.remnant_mass_source
+        assert remnant_mass_source.shape == (0,)
+        assert remnant_mass_source.dtype == np.float64
+
+    def test_redshift_empty_slice(self, params):
+        empty = params[:0]
+        redshift = empty.redshift
+        assert redshift.shape == (0,)
+        assert redshift.dtype == np.float64
+
+    def test_remnant_mass_source_empty_slice(self, params):
+        empty = params[:0]
+        remnant_mass_source = empty.remnant_mass_source
+        assert remnant_mass_source.shape == (0,)
+        assert remnant_mass_source.dtype == np.float64
