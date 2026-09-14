@@ -87,3 +87,37 @@ def test_ringdown_prior_samples():
     ).all()
     assert ((0 <= samples["ra"]) & (samples["ra"] <= 2 * np.pi)).all()
     assert ((0 <= samples["psi"]) & (samples["psi"] <= np.pi)).all()
+
+
+def test_log_normal_remnant_mass_keys():
+    from priors.priors import log_normal_remnant_mass
+
+    prior, detector_frame_prior = log_normal_remnant_mass(80.0, sigma=0.1)
+    assert set(prior) == {"remnant_mass_source"}
+    # Source-frame mass, so the detector-frame flag is False, matching
+    # log_normal_masses.
+    assert detector_frame_prior is False
+
+
+def test_log_normal_remnant_mass_median_is_m0():
+    from priors.priors import log_normal_remnant_mass
+
+    prior, _ = log_normal_remnant_mass(80.0, sigma=0.1)
+    samples = prior["remnant_mass_source"].sample(200000)
+    # M0 is the MEDIAN of the mass distribution, not the mean, and sigma
+    # is the standard deviation of log mass, not a width in Msun.
+    assert abs(np.median(samples) / 80.0 - 1) < 0.01
+    assert abs(np.std(np.log(samples)) / 0.1 - 1) < 0.02
+
+
+def test_log_normal_remnant_mass_density_matches_closed_form():
+    from priors.priors import log_normal_remnant_mass
+
+    prior, _ = log_normal_remnant_mass(80.0, sigma=0.3)
+    m = np.array([40.0, 80.0, 160.0])
+    expected = np.exp(-((np.log(m) - np.log(80.0)) ** 2) / (2 * 0.3**2)) / (
+        m * 0.3 * np.sqrt(2 * np.pi)
+    )
+    np.testing.assert_allclose(
+        prior["remnant_mass_source"].prob(m), expected, rtol=1e-10
+    )

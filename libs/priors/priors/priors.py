@@ -300,6 +300,50 @@ def log_normal_masses(
     return prior, detector_frame_prior
 
 
+def log_normal_remnant_mass(
+    m: float,
+    sigma: float = 0.1,
+    cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
+) -> tuple[PriorDict, bool]:
+    """
+    Construct a log normal target population in remnant mass.
+
+    The ringdown sibling of `log_normal_masses`. Used only to reweight a
+    ringdown injection campaign to a target population; it is never
+    sampled from to generate waveforms.
+
+    Args:
+        m:
+            Median of the log normal distribution for source-frame remnant
+            mass, in solar masses. This is the median, not the arithmetic
+            mean.
+        sigma:
+            Standard deviation of log remnant mass. Dimensionless; not a
+            width in solar masses.
+        cosmology:
+            Accepted for signature symmetry with `log_normal_masses`. The
+            target carries no redshift term: redshift enters the weight
+            through the ratio in `plots.legacy.ringdown_stats`, and the
+            volume bound comes from the source prior.
+
+    Returns:
+        prior:
+            `PriorDict` with the single key `remnant_mass_source`.
+        detector_frame_prior:
+            `False` — the key is a source-frame mass, matching
+            `log_normal_masses`.
+    """
+    prior = PriorDict()
+    prior["remnant_mass_source"] = LogNormal(
+        name="remnant_mass_source", mu=np.log(m), sigma=sigma
+    )
+    # False: the key is a SOURCE-frame mass. The repo convention is that
+    # this flag says whether the prior's parameters are detector-frame, and
+    # `log_normal_masses` returns False for the same reason. No caller reads
+    # it today, which is exactly why it must not be set wrong here.
+    return prior, False
+
+
 def ringdown_prior(
     cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
 ) -> tuple[PriorDict, bool]:
