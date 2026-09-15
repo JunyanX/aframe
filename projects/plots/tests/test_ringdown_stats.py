@@ -315,3 +315,113 @@ def test_weighted_population_matches_p_s(source_prior, population_sample, m0):
     # paths describe different populations undetected.
     assert abs(got_q - expected["quality"]) < 0.10, (got_q, expected)
     assert abs(got_z - expected["redshift"]) < 0.003, (got_z, expected)
+
+
+def test_variance_includes_rejected_misses():
+    """Design Established facts: compute.py gives 0.25 here; 0.35355339
+    is right, because the rejected draw contributes w^2 mu^2."""
+    from plots.legacy.ringdown_stats import sensitive_volume
+
+    statistic = np.array([1.0, -np.inf])
+    detected = np.array([True, False])
+    weights = np.array([[0.5, 0.5]])
+    mu, err = sensitive_volume(statistic, detected, weights, np.array([0.5]))
+    assert abs(mu[0, 0] - 0.5) < 1e-12
+    assert abs(err[0, 0] - 0.35355339) < 1e-7
+
+
+def test_time_window_miss_keeps_its_weight():
+    """A recovered-but-out-of-window injection is a miss carrying its
+    original weight, not a zeroed weight."""
+    from plots.legacy.ringdown_stats import sensitive_volume
+
+    statistic = np.array([1.0, 1.0])
+    detected = np.array([True, False])  # second is outside dt
+    weights = np.array([[0.5, 0.5]])
+    mu, err = sensitive_volume(statistic, detected, weights, np.array([0.5]))
+    assert abs(mu[0, 0] - 0.5) < 1e-12
+    assert abs(err[0, 0] - 0.35355339) < 1e-7
+
+
+def test_all_misses_gives_zero_curve_not_an_error():
+    from plots.legacy.ringdown_stats import sensitive_volume
+
+    statistic = np.array([-np.inf, -np.inf])
+    detected = np.array([False, False])
+    weights = np.array([[0.5, 0.5]])
+    mu, err = sensitive_volume(statistic, detected, weights, np.array([0.5]))
+    assert mu[0, 0] == 0.0
+    assert err[0, 0] == 0.0
+
+
+def test_uncertainty_is_calibrated_under_the_stopping_rule():
+    """Ruling 6 and review r5: an ESS threshold does not establish
+    calibration.
+
+    The reference is the FIXED population expectation
+    `p_accept * p_detect`, not the realized acceptance fraction. Comparing
+    against `p_detect * accepted / n` would divide out exactly the
+    stopping-time variability this test exists to probe, and would pass
+    even if the estimator ignored it.
+    """
+    from plots.legacy.ringdown_stats import sensitive_volume
+
+    rng = np.random.default_rng(7)
+    p_accept, p_detect, n_required = 0.4, 0.3, 200
+    truth = p_accept * p_detect  # 0.12, fixed, independent of the draw
+    covered, trials = 0, 2000
+    for _ in range(trials):
+        accepted, rejected = 0, 0
+        while accepted < n_required:
+            if rng.random() < p_accept:
+                accepted += 1
+            else:
+                rejected += 1
+        n = accepted + rejected
+        detected = np.zeros(n, dtype=bool)
+        detected[:accepted] = rng.random(accepted) < p_detect
+        statistic = np.where(detected, 1.0, -np.inf)
+        weights = np.full((1, n), 1.0 / n)
+        mu, err = sensitive_volume(
+            statistic, detected, weights, np.array([0.5])
+        )
+        if abs(mu[0, 0] - truth) <= err[0, 0]:
+            covered += 1
+    rate = covered / trials
+    assert 0.60 < rate < 0.85, f"coverage rate {rate}"
+
+
+def test_uncertainty_is_calibrated_with_heterogeneous_weights():
+    """Uniform weights leave importance-weight heterogeneity untested.
+
+    Here the weight and the detection probability both depend on a
+    sampled parameter, so the weight vector is genuinely uneven — the
+    regime the real campaign is in.
+    """
+    from plots.legacy.ringdown_stats import sensitive_volume
+
+    rng = np.random.default_rng(11)
+    n_draws, trials = 600, 1000
+
+    def p_detect_of(x):
+        return 0.2 + 0.5 * x
+
+    # Population truth: the w-weighted mean detection probability.
+    grid = np.linspace(0, 1, 20001)
+    w_grid = 0.5 + grid
+    truth = np.trapz(w_grid * p_detect_of(grid), grid) / np.trapz(w_grid, grid)
+
+    covered = 0
+    for _ in range(trials):
+        x = rng.random(n_draws)
+        detected = rng.random(n_draws) < p_detect_of(x)
+        statistic = np.where(detected, 1.0, -np.inf)
+        w = 0.5 + x
+        w = w / w.sum()
+        mu, err = sensitive_volume(
+            statistic, detected, w[None, :], np.array([0.5])
+        )
+        if abs(mu[0, 0] - truth) <= err[0, 0]:
+            covered += 1
+    rate = covered / trials
+    assert 0.55 < rate < 0.90, f"weighted coverage rate {rate}"

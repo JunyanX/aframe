@@ -207,3 +207,44 @@ def effective_sample_size(weights):
     """Kish effective sample size of a normalized weight vector."""
     weights = np.asarray(weights, dtype=float)
     return float(weights.sum() ** 2 / (weights**2).sum())
+
+
+def sensitive_volume(statistic, detected, weights, thresholds):
+    """Weighted detection fraction and its uncertainty, per threshold.
+
+    Unlike `plots.legacy.compute.sensitive_volume`, the sum runs over
+    EVERY draw, not only the foreground rows. Rejected injections and
+    time-window misses carry their normalized weight with a detection
+    indicator of zero, so they contribute w^2 mu^2 to the variance. The
+    CBC implementation omits those terms and understates the error;
+    it is left untouched here (design Ruling 6).
+
+    Args:
+        statistic:
+            Detection statistic per draw, shape (n_draws,). Draws that
+            were never injected take -inf so no threshold selects them.
+        detected:
+            Boolean per draw, shape (n_draws,). False for rejected draws
+            and for recovered injections outside the dt window.
+        weights:
+            Normalized weights, shape (n_combos, n_draws), summing to one
+            across draws for each combo.
+        thresholds:
+            Detection-statistic thresholds, shape (n_thresholds,).
+
+    Returns:
+        mu, err: each shape (n_combos, n_thresholds).
+    """
+    statistic = np.asarray(statistic, dtype=float)
+    detected = np.asarray(detected, dtype=bool)
+    weights = np.atleast_2d(np.asarray(weights, dtype=float))
+    thresholds = np.asarray(thresholds, dtype=float)
+
+    mu = np.empty((weights.shape[0], thresholds.size))
+    err = np.empty_like(mu)
+    for i, threshold in enumerate(thresholds):
+        indicator = (detected & (statistic >= threshold)).astype(float)
+        m = (weights * indicator).sum(axis=-1, keepdims=True)
+        err[:, i] = ((weights * (indicator - m)) ** 2).sum(axis=-1) ** 0.5
+        mu[:, i] = m[:, 0]
+    return mu, err
