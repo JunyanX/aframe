@@ -97,6 +97,12 @@ def normalize_log_weights(log_w):
     # not `-=`, since callers keep their own reference to `log_w`.
     log_w = log_w - np.max(log_w)
     total = logsumexp(log_w)
+    # Invariant assertion, not reachable today: the two guards above rule
+    # out NaN and +inf entries and require at least one finite entry, and
+    # subtracting that finite max pins the shifted max to exactly 0, so
+    # logsumexp is bounded below by log(1) = 0 and `total` is always
+    # finite. Kept in case a future change to the shift or the guards
+    # above it stops guaranteeing that.
     if not np.isfinite(total):
         raise ValueError("importance weights have no finite normalization")
     return np.exp(log_w - total)
@@ -248,3 +254,75 @@ def sensitive_volume(statistic, detected, weights, thresholds):
         err[:, i] = ((weights * (indicator - m)) ** 2).sum(axis=-1) ** 0.5
         mu[:, i] = m[:, 0]
     return mu, err
+
+
+def far_threshold_grid(background_statistic, tb_seconds, max_far):
+    """False alarm rates and matching detection-statistic thresholds.
+
+    Each returned FAR is the TRUE inclusive exceedance rate of its
+    threshold, `count(background_statistic >= threshold) / Tb_years` --
+    not a rank. Ranking consecutive sorted background events, as
+    `plots/legacy/main.py:172` does (`np.arange(1, n + 1) / Tb` against
+    `np.sort(background)[-n:][::-1]`), understates the FAR of any
+    threshold inside a tie group: `sensitive_volume` selects with
+    `statistic >= threshold`, which admits the WHOLE tie group, but a
+    rank only credits the tie group's first member. E.g. background
+    `[9.0, 9.0, 8.0]` over one year ranks 9.0 at FAR 1/yr, when the rate
+    at which the pipeline actually reports something scoring >= 9.0 is
+    2/yr. This function returns one (far, threshold) pair per DISTINCT
+    background value, at that value's true rate, so a tie group is
+    represented once, correctly, rather than once per member each
+    under-reporting it.
+
+    This also still validates the two silent failures Task 7 exists to
+    prevent: a FAR axis with no acceptable rank pairs it with no
+    thresholds instead of the CBC construction's `arr[-0:]` full-slice
+    bug, and a threshold whose true rate exceeds `max_far` is dropped
+    rather than kept under a rank-based rate that looked acceptable.
+    """
+    background_statistic = np.asarray(background_statistic, dtype=float)
+    if not np.isfinite(tb_seconds) or tb_seconds <= 0:
+        raise ValueError(
+            f"background livetime must be positive and finite, "
+            f"got {tb_seconds}"
+        )
+    if background_statistic.size == 0:
+        raise ValueError("cannot build a FAR grid from an empty background")
+
+    tb_years = tb_seconds / SECONDS_PER_YEAR
+    sorted_ascending = np.sort(background_statistic)
+    thresholds = np.unique(background_statistic)[::-1]
+    # count(background_statistic >= value): everything from the index of
+    # value's first occurrence in the ascending sort onward.
+    counts = sorted_ascending.size - np.searchsorted(
+        sorted_ascending, thresholds, side="left"
+    )
+    # thresholds descends, so counts -- and therefore fars -- strictly
+    # ascend: each smaller threshold's tie group is a strict superset of
+    # every larger one's.
+    fars = counts / tb_years
+
+    keep = fars <= max_far
+    if not np.any(keep):
+        # fars is sorted ascending, so fars[0] is the smallest rate any
+        # threshold can carry; if even that exceeds max_far, no rank
+        # satisfies it. More background samples cannot fix this -- they
+        # can only add ties or raise counts further -- the remedy is a
+        # longer livetime or a larger max_far.
+        raise ValueError(
+            f"no background rank satisfies max_far={max_far}/yr at "
+            f"Tb={tb_years:.6g} yr (least available rate is "
+            f"{fars[0]:.6g}/yr); a longer livetime or a larger max_far "
+            f"is needed, not a larger background"
+        )
+    thresholds = thresholds[keep]
+    fars = fars[keep]
+    # Invariant assertion, not reachable today: `keep` is a single
+    # boolean array applied to `thresholds` and `fars`, which are the
+    # same length by construction (both derived elementwise from
+    # `thresholds` before this point), so boolean-indexing both by the
+    # same mask always leaves them the same length. Kept in case a
+    # future refactor computes them independently instead.
+    if len(fars) != len(thresholds):
+        raise ValueError("FAR and threshold grids disagree in length")
+    return fars, thresholds

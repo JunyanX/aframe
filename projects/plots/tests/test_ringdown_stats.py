@@ -425,3 +425,93 @@ def test_uncertainty_is_calibrated_with_heterogeneous_weights():
             covered += 1
     rate = covered / trials
     assert 0.55 < rate < 0.90, f"weighted coverage rate {rate}"
+
+
+def test_far_grid_lengths_match():
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    bg = np.arange(1000, dtype=float)
+    fars, thresholds = far_threshold_grid(bg, SECONDS_PER_YEAR, 365)
+    assert len(fars) == len(thresholds) == 365
+    assert thresholds[0] > thresholds[-1]  # descending
+
+
+def test_far_grid_caps_at_available_background():
+    """max_events > len(background): CBC silently returns 365 FARs
+    against 10 thresholds."""
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    bg = np.arange(10, dtype=float)
+    fars, thresholds = far_threshold_grid(bg, SECONDS_PER_YEAR, 365)
+    assert len(fars) == len(thresholds) == 10
+
+
+def test_far_grid_rejects_short_livetime():
+    """max_events == 0: CBC returns an empty FAR axis against the whole
+    threshold array, because [-0:] is the full slice."""
+    from plots.legacy.ringdown_stats import far_threshold_grid
+
+    with pytest.raises(ValueError, match="no background rank"):
+        far_threshold_grid(np.arange(1744, dtype=float), 13134.0, 365)
+
+
+def test_far_grid_rejects_bad_livetime():
+    from plots.legacy.ringdown_stats import far_threshold_grid
+
+    bg = np.arange(100, dtype=float)
+    with pytest.raises(ValueError, match="livetime"):
+        far_threshold_grid(bg, 0.0, 365)
+    with pytest.raises(ValueError, match="livetime"):
+        far_threshold_grid(bg, -1.0, 365)
+    with pytest.raises(ValueError, match="livetime"):
+        far_threshold_grid(bg, np.inf, 365)
+    with pytest.raises(ValueError, match="livetime"):
+        far_threshold_grid(bg, np.nan, 365)
+
+
+def test_far_grid_rejects_empty_background():
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    with pytest.raises(ValueError, match="empty background"):
+        far_threshold_grid(np.array([]), SECONDS_PER_YEAR, 365)
+
+
+def test_far_grid_credits_tie_group_with_true_exceedance_rate():
+    """A tie group must be reported once, at the rate of everything
+    `sensitive_volume`'s `statistic >= threshold` would actually admit --
+    not once per member at an understated rank-based rate."""
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    bg = np.array([9.0, 9.0, 8.0])
+    fars, thresholds = far_threshold_grid(bg, SECONDS_PER_YEAR, 3)
+    # A list of (threshold, far) pairs, not a dict: a dict keyed on
+    # threshold would silently collapse a rank-based result's duplicate
+    # 9.0 entries down to whichever one is listed last, which can mask
+    # exactly the bug this test exists to catch.
+    pairs = list(zip(thresholds.tolist(), fars.tolist(), strict=True))
+    assert pairs == [(9.0, 2.0), (8.0, 3.0)]
+
+
+def test_far_grid_rejects_tie_group_whose_true_rate_exceeds_cap():
+    """The tie at 9.0 has a true rate of 2/yr. At max_far=1 that must
+    raise, not silently advertise the rank-based rate of 1/yr."""
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    bg = np.array([9.0, 9.0, 8.0])
+    with pytest.raises(ValueError, match="no background rank"):
+        far_threshold_grid(bg, SECONDS_PER_YEAR, 1)
