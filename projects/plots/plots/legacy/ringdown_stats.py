@@ -100,3 +100,110 @@ def normalize_log_weights(log_w):
     if not np.isfinite(total):
         raise ValueError("importance weights have no finite normalization")
     return np.exp(log_w - total)
+
+
+def _support_grid(source_prior, cosmology, n_q, n_z):
+    """Mass support bounds and marginal weights on a (Q, z) grid.
+
+    The transformed prior is not a box in (M, chi, z): for each (Q, z)
+    the frequency bounds impose a different mass interval, so coverage
+    has to be integrated rather than read off a range.
+    """
+    from ledger.injections import C, G, MSUN
+
+    quality = source_prior["quality"]
+    q = np.linspace(quality.minimum, quality.maximum, n_q)
+    zmin, zmax = redshift_bounds(source_prior, cosmology)
+    z = np.linspace(zmin, zmax, n_z)
+    qq, zz = np.meshgrid(q, z, indexing="ij")
+
+    k = C**3 / (2 * np.pi * G * MSUN)
+    g = 1 - 0.63 * (2 / qq) ** (2 / 3)
+    f_min = source_prior["frequency"].minimum
+    f_max = source_prior["frequency"].maximum
+    m_min = k * g / (f_max * (1 + zz))
+    m_max = k * g / (f_min * (1 + zz))
+
+    # Q keeps the source marginal; z uses the TARGET marginal, which is
+    # what the weights actually impose (design Ruling 4).
+    w_q = quality.prob(q)
+    w_q = w_q / np.trapz(w_q, q)
+    dv = cosmology.differential_comoving_volume(z).value
+    p_z = dv / (1 + z)
+    p_z = p_z / np.trapz(p_z, z)
+    return q, z, qq, zz, m_min, m_max, w_q, p_z
+
+
+def _target_mass_fraction(m_min, m_max, m0, sigma):
+    """P(m_min <= M <= m_max) under LogNormal(ln m0, sigma), stably.
+
+    A plain CDF difference loses the whole interval in the upper tail:
+    both terms round to 1.0 and the difference is exactly 0.0 where the
+    true probability is small but nonzero. At m0=1, sigma=0.3 over
+    [24, 273] Msun the naive form gives 0.0 against 1.596885e-26 from the
+    survival-function difference. That zero propagates to a zero coverage
+    normalization and NaN conditioned means, with an ESS that still
+    passes its floor -- so nothing downstream catches it.
+    """
+    from scipy.stats import norm
+
+    lo = (np.log(m_min) - np.log(m0)) / sigma
+    hi = (np.log(m_max) - np.log(m0)) / sigma
+    # Subtract on whichever tail keeps the significant digits.
+    upper = norm.sf(lo) - norm.sf(hi)
+    lower = norm.cdf(hi) - norm.cdf(lo)
+    return np.clip(np.where(lo > 0, upper, lower), 0.0, 1.0)
+
+
+def support_coverage(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
+    """Fraction of the intended target lying inside the joint support.
+
+    Independent of effective sample size: ESS is small when few samples
+    carry most of the weight, coverage is small when part of the intended
+    population has no samples at all. More injections raise ESS and never
+    touch coverage.
+    """
+    q, z, _, _, m_min, m_max, w_q, p_z = _support_grid(
+        source_prior, cosmology, n_q, n_z
+    )
+    a = _target_mass_fraction(m_min, m_max, m0, sigma)
+    return float(np.trapz(np.trapz(a * p_z[None, :], z, axis=1) * w_q, q))
+
+
+def conditioned_means(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
+    """Means of the support-conditioned population p_S.
+
+    Self-normalizing the sampled weights estimates p_S for every target
+    whose coverage is below one, so this — not the nominal marginal — is
+    the reference a target-identity test compares against, regardless of
+    any warning threshold.
+    """
+    q, z, qq, zz, m_min, m_max, w_q, p_z = _support_grid(
+        source_prior, cosmology, n_q, n_z
+    )
+    a = _target_mass_fraction(m_min, m_max, m0, sigma)
+    joint = a * w_q[:, None] * p_z[None, :]
+    norm_c = np.trapz(np.trapz(joint, z, axis=1), q)
+    if not np.isfinite(norm_c) or norm_c <= 0:
+        raise ValueError(
+            f"target M0={m0}, sigma={sigma} left no numerically "
+            f"representable probability inside the joint support, so "
+            f"conditioned means are undefined. A log-normal has positive "
+            f"density at every positive mass, so this is underflow rather "
+            f"than mathematically empty support; the point of raising is "
+            f"to never write non-finite population metadata."
+        )
+    return {
+        "quality": float(
+            np.trapz(np.trapz(joint * qq, z, axis=1), q) / norm_c
+        ),
+        "redshift": float(
+            np.trapz(np.trapz(joint * zz, z, axis=1), q) / norm_c
+        ),
+    }
+
+
+def effective_sample_size(weights):
+    """Kish effective sample size of a normalized weight vector."""
+    weights = np.asarray(weights, dtype=float)
+    return float(weights.sum() ** 2 / (weights**2).sum())
