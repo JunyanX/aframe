@@ -515,3 +515,162 @@ def test_far_grid_rejects_tie_group_whose_true_rate_exceeds_cap():
     bg = np.array([9.0, 9.0, 8.0])
     with pytest.raises(ValueError, match="no background rank"):
         far_threshold_grid(bg, SECONDS_PER_YEAR, 1)
+
+
+def test_far_grid_rejects_nan_background():
+    """NaN sorts ABOVE every finite value, so it becomes the top
+    threshold at the lowest FAR while `statistic >= nan` is false for
+    every event. Reproduced against the committed helper:
+
+        bg = [1.0, 2.0, nan] -> thresholds [nan, 2, 1] at FARs [1, 2, 3]
+                                actual inclusive counts:   [0, 1, 2]
+
+    Every finite threshold's rate was wrong too, not only the NaN's, and
+    the run still exited 0 and wrote both output files. The raise has to
+    come before any of that.
+    """
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    with pytest.raises(ValueError, match="1 non-finite entries"):
+        far_threshold_grid(np.array([1.0, 2.0, np.nan]), SECONDS_PER_YEAR, 3)
+
+
+def test_far_grid_rejects_infinite_background_entries():
+    """+inf and -inf are rejected as well, and none of the three is
+    silently dropped: dropping would leave Tb describing a livetime the
+    surviving sample no longer covers, understating every FAR."""
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    for bad in (np.inf, -np.inf):
+        with pytest.raises(ValueError, match="non-finite"):
+            far_threshold_grid(np.array([1.0, 2.0, bad]), SECONDS_PER_YEAR, 3)
+
+
+def test_far_grid_non_finite_message_counts_every_offender():
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    bg = np.array([1.0, np.nan, 2.0, np.inf, -np.inf])
+    with pytest.raises(ValueError, match="3 non-finite entries.* out of 5"):
+        far_threshold_grid(bg, SECONDS_PER_YEAR, 3)
+
+
+# tb_years * (1/tb_years) rounds to 0.9999999999999999 at this livetime,
+# which is what makes the three cases below discriminate between
+# candidate bounds that differ only at a floating-point boundary.
+_TB_BOUNDARY = 100006.0
+
+
+def test_far_grid_single_event_boundary():
+    """One event, cap exactly its own rate.
+
+    A `floor`-based candidate bound gives k=0 here -- and `s[-0:]` is the
+    WHOLE array, the same slicing trap Task 7 exists for, so the wrong
+    bound still answers correctly. A boundary regression, NOT the
+    mutation gate.
+    """
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    tb_years = _TB_BOUNDARY / SECONDS_PER_YEAR
+    fars, thresholds = far_threshold_grid(
+        np.array([9.0]), _TB_BOUNDARY, 1 / tb_years
+    )
+    np.testing.assert_array_equal(thresholds, np.array([9.0]))
+    assert abs(fars[0] - 315.55706658) < 1e-7
+
+
+def test_far_grid_two_event_boundary():
+    """Two events, cap exactly the full-background rate.
+
+    The cap admits the whole background, so the full-background branch
+    short-circuits the candidate bound and a wrong bound is never
+    evaluated. Also a boundary regression, also not the gate.
+    """
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    tb_years = _TB_BOUNDARY / SECONDS_PER_YEAR
+    fars, thresholds = far_threshold_grid(
+        np.array([8.0, 9.0]), _TB_BOUNDARY, 2 / tb_years
+    )
+    np.testing.assert_array_equal(thresholds, np.array([9.0, 8.0]))
+    assert abs(fars[-1] - 631.11413315) < 1e-7
+
+
+def test_far_grid_three_event_boundary_exercises_the_bound():
+    """THE mutation gate for the candidate bound.
+
+    The full-background rate is 946.67/yr against a cap of 631.11/yr, so
+    the full-background branch does not fire and the bound is genuinely
+    evaluated. Re-derived against this implementation:
+
+        [9.0]           committed [9.]     here [9.]     floor [9.]
+        [8.0, 9.0]      committed [9. 8.]  here [9. 8.]  floor [9. 8.]
+        [7.0, 8.0, 9.0] committed [9. 8.]  here [9. 8.]  floor [9.]
+
+    `p = max_far * tb_years` is 1.9999999999999998 in the third case, so
+    a `floor` bound takes k=1 and loses the 8.0 threshold.
+    """
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    tb_years = _TB_BOUNDARY / SECONDS_PER_YEAR
+    fars, thresholds = far_threshold_grid(
+        np.array([7.0, 8.0, 9.0]), _TB_BOUNDARY, 2 / tb_years
+    )
+    np.testing.assert_array_equal(thresholds, np.array([9.0, 8.0]))
+    assert abs(fars[0] - 315.55706658) < 1e-7
+    assert abs(fars[1] - 631.11413315) < 1e-7
+
+
+def test_far_grid_accepts_caps_that_overflow_a_naive_bound():
+    """Caps the committed helper accepts and must keep accepting.
+
+    `int(np.ceil(max_far * tb_years))` raises OverflowError on both.
+    """
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    fars, thresholds = far_threshold_grid(
+        np.array([9.0]), SECONDS_PER_YEAR, np.inf
+    )
+    np.testing.assert_array_equal(fars, np.array([1.0]))
+    np.testing.assert_array_equal(thresholds, np.array([9.0]))
+
+    fars, thresholds = far_threshold_grid(
+        np.array([9.0]), 2 * SECONDS_PER_YEAR, 1e308
+    )
+    np.testing.assert_array_equal(fars, np.array([0.5]))
+    np.testing.assert_array_equal(thresholds, np.array([9.0]))
+
+
+def test_far_grid_nan_cap_keeps_the_committed_message():
+    """The full-background branch is written as `not (... > ...)` so a
+    NaN cap lands in it. Deleting that branch makes this die in
+    `int(nan)` instead of raising the documented message."""
+    from plots.legacy.ringdown_stats import (
+        SECONDS_PER_YEAR,
+        far_threshold_grid,
+    )
+
+    with pytest.raises(ValueError, match="no background rank"):
+        far_threshold_grid(
+            np.arange(100, dtype=float), SECONDS_PER_YEAR, np.nan
+        )

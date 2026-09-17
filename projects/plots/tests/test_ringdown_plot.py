@@ -199,3 +199,39 @@ def test_main_rejects_a_target_below_the_ess_floor(campaign, tmp_path):
             output_dir=tmp_path / "rejected",
             sigma=0.01,
         )
+
+
+def test_main_refuses_a_non_finite_background_before_writing(
+    campaign, tmp_path
+):
+    """The raise must come BEFORE any output exists.
+
+    With one NaN in the background the committed code exited 0 and wrote
+    both files with `fars=[1.0], thresholds=[NaN], sv=[0.0], err=[0.0]`.
+    A successfully written wrong figure is the failure mode this whole
+    stage is built to avoid, so the test asserts on the absence of the
+    files, not only on the exception.
+    """
+    from ledger.events import EventSet
+    from plots.legacy.ringdown import main
+    from priors.priors import ringdown_prior
+
+    back, fore, rej = campaign
+    poisoned = EventSet.read(back)
+    poisoned.detection_statistic[0] = np.nan
+    bad_back = tmp_path / "background-nan.hdf5"
+    poisoned.write(bad_back)
+
+    out = tmp_path / "nan-out"
+    with pytest.raises(ValueError, match="non-finite"):
+        main(
+            bad_back,
+            fore,
+            rej,
+            ["H1", "L1"],
+            remnant_mass_combos=[40, 80, 120, 150],
+            source_prior=ringdown_prior,
+            output_dir=out,
+        )
+    assert not (out / "sensitive_volume.h5").exists()
+    assert not (out / "sensitive_volume.html").exists()

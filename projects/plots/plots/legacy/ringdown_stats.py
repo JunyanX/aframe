@@ -279,6 +279,10 @@ def far_threshold_grid(background_statistic, tb_seconds, max_far):
     thresholds instead of the CBC construction's `arr[-0:]` full-slice
     bug, and a threshold whose true rate exceeds `max_far` is dropped
     rather than kept under a rank-based rate that looked acceptable.
+
+    NaN, +inf and -inf in `background_statistic` are all rejected; none
+    is dropped. Dropping would leave `tb_seconds` describing a livetime
+    the surviving sample no longer covers, understating every FAR.
     """
     background_statistic = np.asarray(background_statistic, dtype=float)
     if not np.isfinite(tb_seconds) or tb_seconds <= 0:
@@ -288,12 +292,82 @@ def far_threshold_grid(background_statistic, tb_seconds, max_far):
         )
     if background_statistic.size == 0:
         raise ValueError("cannot build a FAR grid from an empty background")
+    # Reachable: this array is read straight out of the search's event
+    # ledger and nothing between the HDF5 file and here filters it. A
+    # single NaN is the dangerous case, because NaN sorts ABOVE every
+    # finite value, so it becomes the top threshold at the lowest FAR
+    # while `statistic >= nan` is false for every event -- a complete,
+    # successfully written, wrong figure. (The 4.1e8-event O4b background
+    # scanned clean, so this is insurance on a silent path, not a repair.)
+    n_bad = int(np.count_nonzero(~np.isfinite(background_statistic)))
+    if n_bad:
+        raise ValueError(
+            f"background statistic has {n_bad} non-finite entries (NaN or "
+            f"+/-inf) out of {background_statistic.size}; a FAR grid over "
+            f"them would be silently wrong, and dropping them would leave "
+            f"Tb={tb_seconds} s describing a sample it no longer covers"
+        )
 
     tb_years = tb_seconds / SECONDS_PER_YEAR
     sorted_ascending = np.sort(background_statistic)
-    thresholds = np.unique(background_statistic)[::-1]
+    # Only the top of the background can survive `max_far`: counts rise
+    # monotonically as the threshold falls, so the retained thresholds are
+    # always a prefix of the descending distinct values. `np.unique` over
+    # the WHOLE array would build several more full-length intermediates
+    # (a second sort, its neighbour-difference mask, its result) and then
+    # discard all but a few hundred entries -- measured at ~4.1x the input
+    # in extra peak RSS, or ~13.6 GB at the 411,742,636-event reference
+    # scale, on a task that declares no request_memory.
+    if not sorted_ascending.size / tb_years > max_far:
+        # The cap already admits the entire background, so there is
+        # nothing to bound and no product to form. Written as
+        # `not (... > ...)` rather than `<=` so that a NaN cap lands here
+        # too, and that is what this branch is FOR: a NaN cap retains
+        # nothing either way, but taking the other branch would make it
+        # die in `int(nan)` instead of raising the committed
+        # "no background rank" message. Deleting this branch is caught by
+        # `test_far_grid_nan_cap_keeps_the_committed_message`.
+        #
+        # It is NOT what makes `max_far=inf` or `max_far=1e308` work --
+        # `np.clip` below absorbs an infinite product on its own. Only
+        # NaN escapes the clip.
+        k = sorted_ascending.size
+    else:
+        # A count c is retained iff fl(c / tb_years) <= max_far. Division
+        # is correctly rounded, so c / tb_years <= max_far * (1 + 2u), and
+        # with p = fl(max_far * tb_years) >= max_far * tb_years * (1 - u)
+        # that gives c <= p * (1 + 5u) for u = 2**-53. Whenever
+        # p < 2**53 / 5 that bound is strictly below p + 1, so ceil(p) + 1
+        # over-includes -- never under-includes, which is what matters.
+        # This branch has max_far < size / tb_years, so p is below
+        # size + 1 ulp: finite (no overflow) and, for any background that
+        # fits in memory, vastly below 2**53 / 5.
+        #
+        # `np.clip` is what keeps the int conversion total: it absorbs an
+        # infinite product at whichever end it arrives. `max_far=-inf`
+        # does reach this branch and clips up to the floor; `max_far=inf`
+        # would clip down to `size` if the branch above were removed.
+        #
+        # The floor's VALUE of 1 rather than 0 is deliberate but,
+        # measured, not observable today: `ceil(p) + 1 < 1` needs
+        # `p <= -1`, which needs a negative `max_far`, and a negative cap
+        # retains nothing, so 0 and 1 reach the same raise with the same
+        # message. Kept because `s[-0:]` is the WHOLE array -- the slicing
+        # trap Task 7 exists to guard against -- so if a future bound ever
+        # yielded 0 for a positive cap, the failure would be a silent
+        # revert to the full-array path rather than an error.
+        k = int(
+            np.clip(
+                np.ceil(max_far * tb_years) + 1.0,
+                1.0,
+                float(sorted_ascending.size),
+            )
+        )
+    thresholds = np.unique(sorted_ascending[-k:])[::-1]
     # count(background_statistic >= value): everything from the index of
-    # value's first occurrence in the ascending sort onward.
+    # value's first occurrence in the ascending sort onward. Searched
+    # against the WHOLE sorted array, not the candidate tail, so ties
+    # reaching below the tail are still counted in full.
     counts = sorted_ascending.size - np.searchsorted(
         sorted_ascending, thresholds, side="left"
     )
