@@ -42,16 +42,16 @@ TRAIN_CONFIGS = {
     "ringdown": root / "projects" / "train" / "configs" / "ringdown.yaml",
 }
 
-# law target the generated run.sh invokes. Ringdown stops at SandboxInfer
-# rather than Sandbox because SensitiveVolume weights injections to a
-# target mass population, which has no ringdown analogue until someone
-# decides what the figure of merit should be. SandboxInfer requires
-# ExportLocal and TestingWaveforms itself, so naming it is enough.
+# law target the generated run.sh invokes. Ringdown reaches Sandbox, whose
+# SensitiveVolume task dispatches on waveform_type and reweights a ringdown
+# campaign to log normal remnant-mass targets. SandboxSV requires
+# SandboxInfer, which requires ExportLocal and TestingWaveforms, so naming
+# Sandbox is enough.
 RUN_TARGETS = {
     "sandbox": "aframe.pipelines.sandbox.Sandbox",
     "review": "aframe.pipelines.sandbox.Sandbox",
     "tune": "aframe.pipelines.sandbox.Tune",
-    "ringdown": "aframe.pipelines.sandbox.SandboxInfer",
+    "ringdown": "aframe.pipelines.sandbox.Sandbox",
 }
 
 ONLINE_CONFIGS = [
