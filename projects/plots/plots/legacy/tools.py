@@ -43,19 +43,25 @@ def plot_err_bands(p, x, y, err, **kwargs):
     )
 
 
-def make_grid(combos):
+def make_grid(combos, title_fn=None, y_axis_label=None):
     num_plots = len(combos)
     if num_plots not in [1, 4]:
         raise ValueError(
             f"Only support 2x2 or 1x1 grids, can't plot {num_plots} combos"
         )
 
+    if title_fn is None:
+
+        def title_fn(combo):
+            return r"$$\text{{Log Normal }}m_1={}, m_2={}$$".format(*combo)
+
+    if y_axis_label is None:
+        y_axis_label = r"$$\text{Sensitive Volume [Gpc}" r"^{3}\text{]}$$"
+
     plots = []
     if num_plots == 1:
         kwargs = {
-            "title": r"$$\text{{Log Normal }}m_1={}, m_2={}$$".format(
-                *combos[0]
-            ),
+            "title": title_fn(combos[0]),
             "x_axis_type": "log",
             "tools": "save",
             "width": 380,
@@ -68,6 +74,7 @@ def make_grid(combos):
         kwargs["x_axis_label"] = (
             r"$$\text{False Alarm Rate " r"[yr}^{-1}\text{]}$$"
         )
+        kwargs["y_axis_label"] = y_axis_label
         p = get_figure(**kwargs)
         p.outline_line_color = "#ffffff"
 
@@ -77,7 +84,7 @@ def make_grid(combos):
 
     for i, combo in enumerate(combos):
         kwargs = {
-            "title": r"$$\text{{Log Normal }}m_1={}, m_2={}$$".format(*combo),
+            "title": title_fn(combo),
             "x_axis_type": "log",
             "tools": "save",
         }
@@ -86,9 +93,7 @@ def make_grid(combos):
         if not i % 2:
             # plots on the left need space for y-axis label
             kwargs["width"] += 30
-            kwargs["y_axis_label"] = (
-                r"$$\text{Sensitive Volume [Gpc}" r"^{3}\text{]}$$"
-            )
+            kwargs["y_axis_label"] = y_axis_label
 
         kwargs["height"] = 220
         if i > 1:
