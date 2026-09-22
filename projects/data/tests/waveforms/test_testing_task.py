@@ -243,8 +243,8 @@ def test_generator_end_to_end_writes_a_ringdown_campaign(
         loaded.injection_time, [9, 19, 29, 39, 49], atol=0.11
     )
     # ringdown parameters, populated and inside the prior's support
-    assert ((loaded.frequency >= 100) & (loaded.frequency <= 1000)).all()
-    assert ((loaded.quality >= 8) & (loaded.quality <= 20)).all()
+    assert ((loaded.frequency >= 40) & (loaded.frequency <= 1000)).all()
+    assert ((loaded.quality >= 2) & (loaded.quality <= 20)).all()
     assert "mass_1" not in cls.__dataclass_fields__
 
     # the rejected file is the ringdown class too. Do NOT assert a count:

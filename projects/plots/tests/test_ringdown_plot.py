@@ -76,12 +76,12 @@ def campaign(tmp_path):
 
     def draw(n):
         return {
-            "frequency": np.exp(rng.uniform(np.log(100), np.log(1000), n)),
-            "quality": rng.uniform(8, 20, n),
+            "frequency": np.exp(rng.uniform(np.log(40), np.log(1000), n)),
+            "quality": rng.uniform(2, 20, n),
             "epsilon": rng.uniform(0, 0.1, n),
             "phase": rng.uniform(0, 2 * np.pi, n),
             "inclination": np.arccos(rng.uniform(-1, 1, n)),
-            "distance": rng.uniform(100, 1000, n),
+            "distance": rng.uniform(100, 20000, n),
             "ra": rng.uniform(0, 2 * np.pi, n),
             "dec": np.arcsin(rng.uniform(-1, 1, n)),
             "psi": rng.uniform(0, np.pi, n),
@@ -164,7 +164,7 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
         assert f.attrs["quantity"] == "sensitive_volume_Gpc3"
         assert f.attrs["mass_frame"] == "source"
         assert "epsilon ~ Uniform(0, 0.1)" in f.attrs["epsilon_prior"]
-        assert "quality ~ Uniform(8, 20)" in f.attrs["quality_prior"]
+        assert "quality ~ Uniform(2, 20)" in f.attrs["quality_prior"]
         assert "dV_c/(1+z)" in f.attrs["redshift_measure"]
         assert "ALL draws" in f.attrs["uncertainty_method"]
         groups = [k for k in f if k not in ("fars", "thresholds")]
@@ -174,7 +174,11 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
         for key in groups:
             g = f[key]
             assert g["sv"].shape[0] == n and g["err"].shape[0] == n
-            assert g.attrs["support_coverage"] > 0.9999
+            # The default prior's distance ceiling reaches z ~ 2.4, where
+            # the heavier targets' low-spin tails redshift below the 40 Hz
+            # floor, so 120 and 150 Msun sit near 0.99 and 0.96: clear of
+            # the floor, but no longer ~1.
+            assert g.attrs["support_coverage"] >= f.attrs["coverage_floor"]
             assert np.isfinite(g.attrs["effective_sample_size"])
 
     html = (out / "sensitive_volume.html").read_text()

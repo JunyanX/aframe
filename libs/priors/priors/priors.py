@@ -372,14 +372,25 @@ def ringdown_prior(
     prior = PriorDict()
 
     # Parameters consumed directly by ml4gw.waveforms.Ringdown
-    prior["frequency"] = LogUniform(100, 1000, unit="Hz")
-    prior["quality"] = Uniform(8, 20)
+    #
+    # ml4gw infers remnant spin from quality as 1 - (2 / Q) ** (20 / 9), so
+    # Q in [2, 20] spans spin 0 to 0.994, the quality range of the LSC
+    # ringdown template banks. A typical BBH remnant, spin ~0.69, is Q ~ 3.4.
+    # Lower spin puts a given remnant mass at a lower frequency, so the 40 Hz
+    # floor is what keeps low-spin remnants of the default sensitivity
+    # targets (40-150 Msun, source frame) covered out to the distance
+    # ceiling below.
+    prior["frequency"] = LogUniform(40, 1000, unit="Hz")
+    prior["quality"] = Uniform(2, 20)
     prior["epsilon"] = Uniform(0, 0.1)
     prior["phase"] = Uniform(0, 2 * np.pi, unit=rad)
     prior["inclination"] = Sine(unit=rad)
+    # 20 Gpc is z ~ 2.4. With epsilon up to 0.1, heavy remnants stay above
+    # SNR 8 in O4 past z ~ 2, and a sensitive volume can never exceed the
+    # volume the injections were drawn from.
     prior["distance"] = UniformComovingVolume(
         100,
-        1000,
+        20000,
         name="luminosity_distance",
         cosmology=cosmology,
         unit=mpc,

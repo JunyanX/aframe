@@ -33,11 +33,11 @@ def test_ringdown_prior_distributions():
 
     assert isinstance(prior["frequency"], LogUniform)
     assert (prior["frequency"].minimum, prior["frequency"].maximum) == (
-        100,
+        40,
         1000,
     )
     assert isinstance(prior["quality"], Uniform)
-    assert (prior["quality"].minimum, prior["quality"].maximum) == (8, 20)
+    assert (prior["quality"].minimum, prior["quality"].maximum) == (2, 20)
     assert isinstance(prior["epsilon"], Uniform)
     assert (prior["epsilon"].minimum, prior["epsilon"].maximum) == (0, 0.1)
     assert isinstance(prior["phase"], Uniform)
@@ -49,7 +49,7 @@ def test_ringdown_prior_distributions():
     assert isinstance(prior["distance"], UniformComovingVolume)
     assert (prior["distance"].minimum, prior["distance"].maximum) == (
         100,
-        1000,
+        20000,
     )
     # Bilby requires this internal name, while PriorDict.sample() preserves
     # the dictionary key ``distance`` expected by ml4gw.
@@ -73,15 +73,17 @@ def test_ringdown_prior_samples():
         assert np.isfinite(values).all()
 
     assert (
-        (100 <= samples["frequency"]) & (samples["frequency"] <= 1000)
+        (40 <= samples["frequency"]) & (samples["frequency"] <= 1000)
     ).all()
-    assert ((8 <= samples["quality"]) & (samples["quality"] <= 20)).all()
+    assert ((2 <= samples["quality"]) & (samples["quality"] <= 20)).all()
     assert ((0 <= samples["epsilon"]) & (samples["epsilon"] <= 0.1)).all()
     assert ((0 <= samples["phase"]) & (samples["phase"] <= 2 * np.pi)).all()
     assert (
         (0 <= samples["inclination"]) & (samples["inclination"] <= np.pi)
     ).all()
-    assert ((100 <= samples["distance"]) & (samples["distance"] <= 1000)).all()
+    assert (
+        (100 <= samples["distance"]) & (samples["distance"] <= 20000)
+    ).all()
     assert (
         (-np.pi / 2 <= samples["dec"]) & (samples["dec"] <= np.pi / 2)
     ).all()
