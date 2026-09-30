@@ -2,6 +2,7 @@ from typing import Literal, Optional
 
 from architectures import Architecture
 from architectures.networks import S4Model, WaveNet, Xylophone
+from architectures.temporal import TemporalHead
 from jaxtyping import Float
 from ml4gw.nn.resnet.resnet_1d import NormLayer, ResNet1D
 from ml4gw.nn.resnet.resnet_2d import ResNet2D
@@ -36,6 +37,9 @@ class SupervisedTimeDomainResNet(ResNet1D, SupervisedArchitecture):
         width_per_group: int = 64,
         stride_type: Optional[list[Literal["stride", "dilation"]]] = None,
         norm_layer: Optional[NormLayer] = None,
+        head_type: Literal["avg", "temporal"] = "avg",
+        temporal_channels: int = 128,
+        temporal_dilations: Optional[list[int]] = None,
     ) -> None:
         super().__init__(
             num_ifos,
@@ -48,6 +52,15 @@ class SupervisedTimeDomainResNet(ResNet1D, SupervisedArchitecture):
             stride_type=stride_type,
             norm_layer=norm_layer,
         )
+        if head_type == "temporal":
+            # ResNet1D's forward runs avgpool -> flatten -> fc, so the
+            # temporal layers go inside avgpool, ahead of the pooling
+            self.avgpool = TemporalHead(
+                self.fc.in_features,
+                temporal_channels,
+                temporal_dilations or [1, 2, 4, 8, 16],
+            )
+            self.fc = torch.nn.Linear(temporal_channels, 1)
 
 
 class SupervisedFrequencyDomainResNet(ResNet1D, SupervisedArchitecture):
