@@ -40,6 +40,7 @@ class SupervisedTimeDomainResNet(ResNet1D, SupervisedArchitecture):
         head_type: Literal["avg", "temporal"] = "avg",
         temporal_channels: int = 128,
         temporal_dilations: Optional[list[int]] = None,
+        temporal_pooling: Literal["avg", "attention"] = "avg",
     ) -> None:
         super().__init__(
             num_ifos,
@@ -59,6 +60,7 @@ class SupervisedTimeDomainResNet(ResNet1D, SupervisedArchitecture):
                 self.fc.in_features,
                 temporal_channels,
                 temporal_dilations or [1, 2, 4, 8, 16],
+                temporal_pooling,
             )
             self.fc = torch.nn.Linear(temporal_channels, 1)
 
