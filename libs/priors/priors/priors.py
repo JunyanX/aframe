@@ -300,29 +300,106 @@ def log_normal_masses(
     return prior, detector_frame_prior
 
 
-def ringdown_prior(
+def log_normal_remnant_mass(
+    m: float,
+    sigma: float = 0.1,
     cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
-) -> (PriorDict, bool):
+) -> tuple[PriorDict, bool]:
     """
-    Define a Bilby `PriorDict` containing distributions for ringdown parameters
+    Construct a log normal target population in remnant mass.
 
-    Quality, Frequency, and Distance are defined in the detector frame
+    The ringdown sibling of `log_normal_masses`. Used only to reweight a
+    ringdown injection campaign to a target population; it is never
+    sampled from to generate waveforms.
 
     Args:
-        cosmology: An `astropy` cosmology, used to determine distance sampling
+        m:
+            Median of the log normal distribution for source-frame remnant
+            mass, in solar masses. This is the median, not the arithmetic
+            mean.
+        sigma:
+            Standard deviation of log remnant mass. Dimensionless; not a
+            width in solar masses.
+        cosmology:
+            Accepted for signature symmetry with `log_normal_masses`. The
+            target carries no redshift term: redshift enters the weight
+            through the ratio in `plots.legacy.ringdown_stats`, and the
+            volume bound comes from the source prior.
 
     Returns:
-        prior: `
-            PriorDict` containing the specified distributions
+        prior:
+            `PriorDict` with the single key `remnant_mass_source`.
         detector_frame_prior:
-            A boolean indicating if the prior is in the detector frame.
+            `False` — the key is a source-frame mass, matching
+            `log_normal_masses`.
     """
-    prior = uniform_extrinsic()
-    prior["quality"] = Uniform(8, 20)
-    prior["frequency"] = LogUniform(100, 1000)
-    prior["distance"] = UniformComovingVolume(
-        100, 1000, name="luminosity_distance", cosmology=cosmology
+    prior = PriorDict()
+    prior["remnant_mass_source"] = LogNormal(
+        name="remnant_mass_source", mu=np.log(m), sigma=sigma
     )
+    # False: the key is a SOURCE-frame mass. The repo convention is that
+    # this flag says whether the prior's parameters are detector-frame, and
+    # `log_normal_masses` returns False for the same reason. No caller reads
+    # it today, which is exactly why it must not be set wrong here.
+    return prior, False
+
+
+def ringdown_prior(
+    cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
+) -> tuple[PriorDict, bool]:
+    """
+    Define a Bilby `PriorDict` for ml4gw ringdown waveforms.
+
+    Frequency and distance are specified in Hz and Mpc, respectively. All
+    waveform parameters are defined in the detector frame. Sky location and
+    polarization parameters are included for projecting the generated plus
+    and cross polarizations onto a detector network.
+
+    Args:
+        cosmology:
+            An `astropy` cosmology used to sample luminosity distance uniformly
+            in comoving volume.
+
+    Returns:
+        prior:
+            `PriorDict` containing the parameters expected by
+            `ml4gw.waveforms.Ringdown`, along with the sky location and
+            polarization parameters needed for detector projection.
+        detector_frame_prior:
+            A boolean indicating that the waveform parameters are defined in
+            the detector frame.
+    """
+    prior = PriorDict()
+
+    # Parameters consumed directly by ml4gw.waveforms.Ringdown
+    #
+    # ml4gw infers remnant spin from quality as 1 - (2 / Q) ** (20 / 9), so
+    # Q in [2, 20] spans spin 0 to 0.994, the quality range of the LSC
+    # ringdown template banks. A typical BBH remnant, spin ~0.69, is Q ~ 3.4.
+    # Lower spin puts a given remnant mass at a lower frequency, so the 40 Hz
+    # floor is what keeps low-spin remnants of the default sensitivity
+    # targets (40-150 Msun, source frame) covered out to the distance
+    # ceiling below.
+    prior["frequency"] = LogUniform(40, 1000, unit="Hz")
+    prior["quality"] = Uniform(2, 20)
+    prior["epsilon"] = Uniform(0, 0.1)
+    prior["phase"] = Uniform(0, 2 * np.pi, unit=rad)
+    prior["inclination"] = Sine(unit=rad)
+    # 20 Gpc is z ~ 2.4. With epsilon up to 0.1, heavy remnants stay above
+    # SNR 8 in O4 past z ~ 2, and a sensitive volume can never exceed the
+    # volume the injections were drawn from.
+    prior["distance"] = UniformComovingVolume(
+        100,
+        20000,
+        name="luminosity_distance",
+        cosmology=cosmology,
+        unit=mpc,
+    )
+
+    # Extrinsic parameters used to project polarizations onto detectors
+    prior["dec"] = Cosine(unit=rad)
+    prior["ra"] = Uniform(0, 2 * np.pi, unit=rad)
+    prior["psi"] = Uniform(0, np.pi, unit=rad)
 
     detector_frame_prior = True
     return prior, detector_frame_prior
