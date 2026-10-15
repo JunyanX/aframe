@@ -341,7 +341,7 @@ class Ledger:
         self.__post_init__()
 
     @classmethod
-    def aggregate(
+    def aggregate(  # noqa: C901
         cls,
         files: Iterable[Path],
         fname: Path,
@@ -411,6 +411,14 @@ class Ledger:
                         else:
                             ours = target.attrs[key]
 
+                        if source_length and key not in source.attrs:
+                            # only an empty source may omit metadata. A
+                            # populated one would otherwise inherit what
+                            # the previous source declared
+                            raise KeyError(
+                                f"{source.filename} has {source_length} "
+                                f"rows but no '{key}' metadata"
+                            )
                         theirs = source.attrs.get(key)
                         value = cls.compare_metadata(key, ours, theirs)
                         if value is not None:
