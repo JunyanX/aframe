@@ -1,11 +1,16 @@
 import logging
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import data.waveforms.utils as utils
 import numpy as np
 from data.waveforms.rejection import rejection_sample
-from ledger.injections import InterferometerResponseSet, waveform_class_factory
+from ledger.injections import (
+    InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
+    waveform_class_factory,
+)
 
 
 def testing_waveforms(
@@ -31,6 +36,7 @@ def testing_waveforms(
     rejected_file: Path,
     jitter: float = 0.1,
     seed: int | None = None,
+    waveform_type: Literal["cbc", "ringdown"] = "cbc",
 ):
     """
     Generates testing waveforms via rejection sampling
@@ -99,6 +105,9 @@ def testing_waveforms(
             Scale of random jitter to add to injection times
         seed:
             Random seed to use for reproducibility
+        waveform_type:
+            Family to draw from, which selects both the generator and
+            the ledger classes written out. Defaults to ``"cbc"``.
 
     Returns:
         The name of the waveform file and the name of the file containing the
@@ -154,12 +163,18 @@ def testing_waveforms(
         snr_threshold=snr_threshold,
         psd=psds,
         max_num_samples=max_num_samples,
+        waveform_type=waveform_type,
     )
 
-    # create the ResponseSet dataclass based on the passed ifos
+    # create the ResponseSet dataclass based on the ifos and waveform family
+    base_cls = (
+        RingdownInterferometerResponseSet
+        if waveform_type == "ringdown"
+        else InterferometerResponseSet
+    )
     ResponseSet = waveform_class_factory(
         ifos,
-        InterferometerResponseSet,
+        base_cls,
         cls_name="ResponseSet",
     )
 

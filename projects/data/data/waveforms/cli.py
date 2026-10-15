@@ -1,8 +1,8 @@
 from data.waveforms.rejection import rejection_sample
 from data.waveforms.testing import testing_waveforms
 from data.waveforms.training import training_waveforms
+from data.waveforms.validation import main as validation_main
 from jsonargparse import ActionConfigFile, ArgumentParser
-from ledger.injections import WaveformSet, waveform_class_factory
 
 training_parser = ArgumentParser()
 training_parser.add_argument("--config", action=ActionConfigFile)
@@ -38,12 +38,4 @@ def testing(args=None):
 
 
 def validation(args=None):
-    cfg = validation_parser.parse_args(args)
-    args_dict = {k: v for k, v in cfg.as_dict().items() if k != "config"}
-    output_file = args_dict.pop("output_file")
-    cls = waveform_class_factory(
-        args_dict["ifos"], WaveformSet, "IfoWaveformSet"
-    )
-    parameters, _ = rejection_sample(**args_dict)
-    waveform_set = cls(**parameters)
-    waveform_set.write(output_file)
+    validation_main(validation_parser.parse_args(args))

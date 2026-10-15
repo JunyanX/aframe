@@ -1,19 +1,23 @@
 from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import torch
 from bilby.core.utils import random as bilby_random
+from data.waveforms.ringdown import generate_ringdown
 from data.waveforms.utils import convert_to_detector_frame, load_psds
 from ledger.injections import (
     BilbyParameterSet,
     InjectionParameterSet,
+    RingdownInjectionParameterSet,
     WaveformPolarizationSet,
 )
 from ml4gw.gw import compute_ifo_snr, compute_observed_strain, get_ifo_geometry
 
 ResponseSetFields = dict[str, np.ndarray | float]
+RejectedParameters = InjectionParameterSet | RingdownInjectionParameterSet
 
 
 def rejection_sample(
@@ -32,10 +36,25 @@ def rejection_sample(
     psd: Path | torch.Tensor,
     max_num_samples: int,
     seed: int | None = None,
-) -> tuple[ResponseSetFields, InjectionParameterSet]:
+    waveform_type: Literal["cbc", "ringdown"] = "cbc",
+) -> tuple[ResponseSetFields, RejectedParameters]:
     # bilby priors sample from bilby's own generator
     if seed is not None:
         bilby_random.seed(seed)
+
+    if waveform_type not in ("cbc", "ringdown"):
+        raise ValueError(
+            "waveform_type must be either 'cbc' or 'ringdown', "
+            f"got '{waveform_type}'"
+        )
+
+    # rejected samples are recorded as the parameters we drew, so the
+    # ledger class depends on which waveform family we sampled from
+    rejected_cls = (
+        RingdownInjectionParameterSet
+        if waveform_type == "ringdown"
+        else InjectionParameterSet
+    )
 
     # get the detector tensors and vertices
     # for projecting our waveforms
@@ -61,7 +80,7 @@ def rejection_sample(
     # with large enough snr to fill the segment,
     # keeping track of the number of signals rejected
     num_injections, total_accepted = 0, 0
-    rejected_params = InjectionParameterSet()
+    rejected_params = rejected_cls()
     # Start by simulating the desired number of accepted signals
     num_samples = num_signals
     while total_accepted < num_signals:
@@ -71,19 +90,28 @@ def rejection_sample(
         if num_samples == 1:
             params = {k: params[k] for k in prior.keys() if k in params}
 
-        polarization_set = WaveformPolarizationSet.from_parameters(
-            BilbyParameterSet(**params),
-            minimum_frequency,
-            reference_frequency,
-            sample_rate,
-            waveform_duration,
-            waveform_approximant,
-            right_pad,
-        )
-        polarizations = {
-            "cross": torch.Tensor(polarization_set.cross),
-            "plus": torch.Tensor(polarization_set.plus),
-        }
+        if waveform_type == "ringdown":
+            cross, plus = generate_ringdown(
+                params,
+                sample_rate=sample_rate,
+                waveform_duration=waveform_duration,
+                right_pad=right_pad,
+            )
+            polarizations = {"cross": cross.float(), "plus": plus.float()}
+        else:
+            polarization_set = WaveformPolarizationSet.from_parameters(
+                BilbyParameterSet(**params),
+                minimum_frequency,
+                reference_frequency,
+                sample_rate,
+                waveform_duration,
+                waveform_approximant,
+                right_pad,
+            )
+            polarizations = {
+                "cross": torch.Tensor(polarization_set.cross),
+                "plus": torch.Tensor(polarization_set.plus),
+            }
 
         projected = compute_observed_strain(
             torch.Tensor(params["dec"]),
@@ -133,13 +161,13 @@ def rejection_sample(
         # first record any parameters that were
         # rejected during sampling to a separate object
         rejected = {}
-        for key, attr in InjectionParameterSet.__dataclass_fields__.items():
+        for key, attr in rejected_cls.__dataclass_fields__.items():
             if attr.metadata["kind"] == "parameter":
                 rejected[key] = params[key][~mask]
 
         # add the ifo metadata attribute
         rejected["ifos"] = ifos
-        rejected = InjectionParameterSet(**rejected)
+        rejected = rejected_cls(**rejected)
         rejected_params.append(rejected)
 
         # if nothing got accepted, try again
