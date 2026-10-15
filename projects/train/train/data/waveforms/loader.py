@@ -3,11 +3,15 @@ import math
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Literal
 
 import h5py
 import numpy as np
 import torch
-from ledger.injections import WaveformPolarizationSet
+from ledger.injections import (
+    RingdownWaveformPolarizationSet,
+    WaveformPolarizationSet,
+)
 
 from .sampler import WaveformSampler
 
@@ -26,9 +30,12 @@ class WaveformLoader(WaveformSampler):
         self,
         *args,
         training_waveform_path: Path,
+        waveform_type: Literal["cbc", "ringdown"] = "cbc",
         **kwargs,
     ) -> None:
-        super().__init__(*args, **kwargs)
+        # the base class reads the validation file inside
+        # __init__, so the type has to reach it as an argument
+        super().__init__(*args, waveform_type=waveform_type, **kwargs)
         if training_waveform_path.is_dir():
             self.training_waveform_files = list(
                 training_waveform_path.iterdir()
@@ -36,9 +43,19 @@ class WaveformLoader(WaveformSampler):
         else:
             self.training_waveform_files = [training_waveform_path]
 
-        waveform_set = WaveformPolarizationSet.read(
-            self.training_waveform_files[0]
-        )
+        waveform_set_classes = {
+            "cbc": WaveformPolarizationSet,
+            "ringdown": RingdownWaveformPolarizationSet,
+        }
+        try:
+            waveform_set_cls = waveform_set_classes[waveform_type]
+        except KeyError:
+            raise ValueError(
+                "waveform_type must be either 'cbc' or 'ringdown', "
+                f"got '{waveform_type}'"
+            ) from None
+
+        waveform_set = waveform_set_cls.read(self.training_waveform_files[0])
         if waveform_set.right_pad != self.right_pad:
             raise ValueError(
                 "Training waveform file does not have the same "
