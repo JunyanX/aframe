@@ -1,0 +1,22 @@
+# A ringdown search: trains on and injects ml4gw damped-sinusoid
+# ringdowns instead of CBCs, and reports sensitive volume against log
+# normal remnant-mass targets. Start one with
+# `aframe-init snakemake --preset ringdown`.
+
+waveform_type: ringdown
+
+# config.yaml ties source_prior to prior with a YAML anchor, which only
+# resolves inside that file, so a preset that changes prior must set
+# source_prior too.
+prior: priors.priors.ringdown_prior
+source_prior: priors.priors.ringdown_prior
+
+# A ringdown has no inspiral, so right_pad is the span from the onset to
+# the right edge of the waveform: the length of the ringdown itself. The
+# longest damping time the prior admits is Q / (pi f) = 20 / (pi * 40)
+# = 159 ms, so 2 s is ~12.6 e-foldings, with the tail below 4e-6 of the
+# onset amplitude.
+waveform_duration: 4.0
+right_pad: 2.0
+
+train_config: projects/train/configs/ringdown.yaml

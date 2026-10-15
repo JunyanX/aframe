@@ -292,6 +292,7 @@ _group_common_params = dict(
     fduration=config["fduration"],
     integration_window_length=config["integration_window_length"],
     cluster_window_length=config["cluster_window_length"],
+    waveform_type=WAVEFORM_TYPE,
 )
 
 _GROUP_SHELL_SUFFIX = (
@@ -311,6 +312,7 @@ _GROUP_SHELL_SUFFIX = (
     " --fduration {params.fduration}"
     " --integration_window_length {params.integration_window_length}"
     " --cluster_window_length {params.cluster_window_length}"
+    " --waveform_type {params.waveform_type}"
     " &> {log}"
 )
 
@@ -486,5 +488,6 @@ rule aggregate_infer:
         **rule_resources("aggregate_infer", "infer"),
     params:
         analysis_type=ANALYSIS_TYPE,
+        waveform_type=WAVEFORM_TYPE,
     script:
         "scripts/aggregate_infer.py"

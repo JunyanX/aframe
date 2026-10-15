@@ -16,6 +16,10 @@ from data.cleanup import remove_empty_dirs
 from ledger.injections import (
     InjectionParameterSet,
     InterferometerResponseSet,
+    RingdownInjectionParameterSet,
+    RingdownInterferometerResponseSet,
+    RingdownWaveformPolarizationSet,
+    RingdownWaveformSet,
     WaveformPolarizationSet,
     WaveformSet,
     waveform_class_factory,
@@ -25,14 +29,33 @@ from ledger.injections import (
 # send stdout/stderr there to capture tracebacks on failure.
 sys.stdout = sys.stderr = open(snakemake.log[0], "w", buffering=1)
 
+# Each family's (responses, waveforms, polarizations, parameters) classes.
+# A file aggregated with the other family's classes raises instead of
+# being mislabelled.
+FAMILIES = {
+    "cbc": (
+        InterferometerResponseSet,
+        WaveformSet,
+        WaveformPolarizationSet,
+        InjectionParameterSet,
+    ),
+    "ringdown": (
+        RingdownInterferometerResponseSet,
+        RingdownWaveformSet,
+        RingdownWaveformPolarizationSet,
+        RingdownInjectionParameterSet,
+    ),
+}
+responses, waveforms, polarizations, parameters = FAMILIES[
+    snakemake.params.waveform_type
+]
+
 ifos = snakemake.params.ifos
 CLASSES = {
-    "responses": waveform_class_factory(
-        ifos, InterferometerResponseSet, "ResponseSet"
-    ),
-    "waveforms": waveform_class_factory(ifos, WaveformSet, "WaveformSet"),
-    "polarizations": WaveformPolarizationSet,
-    "parameters": InjectionParameterSet,
+    "responses": waveform_class_factory(ifos, responses, "ResponseSet"),
+    "waveforms": waveform_class_factory(ifos, waveforms, "WaveformSet"),
+    "polarizations": polarizations,
+    "parameters": parameters,
 }
 
 for name, output in snakemake.output.items():

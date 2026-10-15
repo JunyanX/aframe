@@ -54,48 +54,99 @@ rule fetch_veto_segments:
         "scripts/fetch_veto_segments.py"
 
 
-rule sensitive_volume:
-    """Compute sensitive volume vs. FAR and plot against LVK pipelines."""
-    input:
-        **({"veto_segments": str(plots_dir / "veto_segments.json")} if VETOS else {}),
-        background=str(infer_dir / "background.hdf5"),
-        foreground=str(infer_dir / "foreground.hdf5"),
-        rejected_params=str(test_waveforms / "rejected_parameters.hdf5"),
-        injection_file=str(plots_dir / "gwtc3_injections.hdf5"),
-    output:
-        sv_data=str(plots_dir / "sensitive_volume.hdf5"),
-        sv_plot=str(plots_dir / "sensitive_volume.html"),
-        gwtc3_sv=str(plots_dir / "gwtc-3_pipeline_sv.hdf5"),
-    log:
-        str(plots_log_dir / "sensitive_volume.log"),
-    container:
-        PLOTS_CONTAINER
-    resources:
-        **rule_resources("sensitive_volume", "plots"),
-    params:
-        ifos=_fmt_list(config["ifos"]),
-        mass_combos=json.dumps(config["mass_combos"]),
-        source_prior=config["source_prior"],
-        dt=config["dt"] or "null",
-        vetos=_fmt_list(VETOS or []),
-    shell:
-        "sensitive-volume"
-        " --background {input.background}"
-        " --foreground {input.foreground}"
-        " --rejected_params {input.rejected_params}"
-        " --injection_file {input.injection_file}"
-        " --ifos '{params.ifos}'"
-        " --mass_combos '{params.mass_combos}'"
-        " --source_prior {params.source_prior}"
-        " --output_file {output.sv_data}"
-        " --plot_file {output.sv_plot}"
-        " --gwtc3_file {output.gwtc3_sv}"
-        " --dt {params.dt}"
-        # Omitted entirely when unset. If we pass an empty list,
-        # we still do a query.
-        + (
-            " --vetos '{params.vetos}' --veto_segments {input.veto_segments}"
-            if VETOS
-            else ""
+if WAVEFORM_TYPE == "ringdown":
+    if VETOS:
+        raise WorkflowError(
+            "vetos are not supported for ringdown runs: the ringdown "
+            "sensitive volume keeps every rejected draw in its "
+            "normalization, so dropping vetoed recoveries would bias it"
         )
-        + " &> {log}"
+
+    rule sensitive_volume:
+        """Compute ringdown sensitive volume vs. FAR for log normal
+        remnant-mass targets. No GWTC-3 comparison and no vetoes.
+        """
+        input:
+            background=str(infer_dir / "background.hdf5"),
+            foreground=str(infer_dir / "foreground.hdf5"),
+            rejected_params=str(test_waveforms / "rejected_parameters.hdf5"),
+        output:
+            sv_data=str(plots_dir / "sensitive_volume.hdf5"),
+            sv_plot=str(plots_dir / "sensitive_volume.html"),
+        log:
+            str(plots_log_dir / "sensitive_volume.log"),
+        container:
+            PLOTS_CONTAINER
+        resources:
+            **rule_resources("sensitive_volume", "plots"),
+        params:
+            ifos=_fmt_list(config["ifos"]),
+            remnant_mass_combos=_fmt_list(config["remnant_mass_combos"]),
+            sigma=config["remnant_mass_sigma"],
+            source_prior=config["source_prior"],
+            dt=config["dt"] or "null",
+        shell:
+            "ringdown-sensitive-volume"
+            " --background {input.background}"
+            " --foreground {input.foreground}"
+            " --rejected_params {input.rejected_params}"
+            " --ifos '{params.ifos}'"
+            " --remnant_mass_combos '{params.remnant_mass_combos}'"
+            " --sigma {params.sigma}"
+            " --source_prior {params.source_prior}"
+            " --dt {params.dt}"
+            " --output_file {output.sv_data}"
+            " --plot_file {output.sv_plot}"
+            " &> {log}"
+
+else:
+
+    rule sensitive_volume:
+        """Compute sensitive volume vs. FAR and plot against LVK pipelines."""
+        input:
+            **(
+                {"veto_segments": str(plots_dir / "veto_segments.json")}
+                if VETOS
+                else {}
+            ),
+            background=str(infer_dir / "background.hdf5"),
+            foreground=str(infer_dir / "foreground.hdf5"),
+            rejected_params=str(test_waveforms / "rejected_parameters.hdf5"),
+            injection_file=str(plots_dir / "gwtc3_injections.hdf5"),
+        output:
+            sv_data=str(plots_dir / "sensitive_volume.hdf5"),
+            sv_plot=str(plots_dir / "sensitive_volume.html"),
+            gwtc3_sv=str(plots_dir / "gwtc-3_pipeline_sv.hdf5"),
+        log:
+            str(plots_log_dir / "sensitive_volume.log"),
+        container:
+            PLOTS_CONTAINER
+        resources:
+            **rule_resources("sensitive_volume", "plots"),
+        params:
+            ifos=_fmt_list(config["ifos"]),
+            mass_combos=json.dumps(config["mass_combos"]),
+            source_prior=config["source_prior"],
+            dt=config["dt"] or "null",
+            vetos=_fmt_list(VETOS or []),
+        shell:
+            "sensitive-volume"
+            " --background {input.background}"
+            " --foreground {input.foreground}"
+            " --rejected_params {input.rejected_params}"
+            " --injection_file {input.injection_file}"
+            " --ifos '{params.ifos}'"
+            " --mass_combos '{params.mass_combos}'"
+            " --source_prior {params.source_prior}"
+            " --output_file {output.sv_data}"
+            " --plot_file {output.sv_plot}"
+            " --gwtc3_file {output.gwtc3_sv}"
+            " --dt {params.dt}"
+            # Omitted entirely when unset. If we pass an empty list,
+            # we still do a query.
+            + (
+                " --vetos '{params.vetos}' --veto_segments {input.veto_segments}"
+                if VETOS
+                else ""
+            )
+            + " &> {log}"

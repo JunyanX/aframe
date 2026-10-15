@@ -45,6 +45,7 @@ pipeline/
   config/config.yaml          all pipeline parameters (defaults for every run)
   config/small.yaml           small end-to-end check preset
   config/review.yaml          short end-to-end validation preset
+  config/ringdown.yaml        ringdown search preset
   profiles/ldg/               LDG HTCondor execution
   profiles/ldg-transfer/      LDG HTCondor execution, nothing shared with execute points
   profiles/delta/             Delta Slurm execution
@@ -147,8 +148,8 @@ with `aframe-init snakemake`, which creates a minimal config stub
 and a copy of `train.yaml` for the run. Edit the stub to override any
 parameters you want to change, and everything else will inherit from
 `pipeline/config/config.yaml`. Individual values can also be overridden
-at the command line with `--config key=value`. `--preset small` or
-`--preset review` starts the stub from a preset, and `--profile` picks
+at the command line with `--config key=value`. `--preset small`,
+`--preset review` or `--preset ringdown` starts the stub from a preset, and `--profile` picks
 the profile (default `pipeline/profiles/ldg`).
 
 `run.sh` passes the default and run configs with `--configfiles`, in that

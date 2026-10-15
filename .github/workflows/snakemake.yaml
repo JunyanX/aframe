@@ -40,3 +40,10 @@ jobs:
           python "$GITHUB_WORKSPACE/scripts/code_snapshot.py"
           snakemake -n --cores 2 --snakefile code/Snakefile \
             --configfiles code/pipeline/config/config.yaml
+
+      - name: validate the ringdown pipeline DAG
+        run: |
+          cd /tmp/aframe-ci-run
+          snakemake -n --cores 2 --snakefile code/Snakefile \
+            --configfiles code/pipeline/config/config.yaml \
+            code/pipeline/config/ringdown.yaml

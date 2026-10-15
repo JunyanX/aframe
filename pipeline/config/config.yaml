@@ -61,6 +61,11 @@ waveform_approximant: IMRPhenomPv2
 right_pad: 2.0                                   # seconds
 seed: 1122
 
+# Waveform family: cbc or ringdown. Selects the generator and the ledger
+# classes every stage writes and reads. `aframe-init snakemake --preset
+# ringdown` sets it along with the parameters a ringdown run needs.
+waveform_type: cbc
+
 # --- Training waveforms ------------------------------------------------------
 num_training_signals: 100000
 # Pre-generate training waveforms to disk instead of sampling them
@@ -171,6 +176,13 @@ mass_combos:
 
 source_prior: *prior
 dt: null  # recovery time delta in seconds (null to disable)
+# Ringdown runs only: median source-frame remnant masses (Msun) of the
+# log normal targets, one panel each, and the standard deviation of log
+# remnant mass (dimensionless). At sigma = 0.1 the ringdown prior's
+# support coverage of these is 1.0000, 0.9999, 0.9884 and 0.9573, all
+# above the 0.95 warning floor; a 250 Msun target covers only 0.528.
+remnant_mass_combos: [40, 80, 120, 150]
+remnant_mass_sigma: 0.1
 
 # Data-quality veto categories to apply before computing sensitive volume.
 # Empty or null to apply none.

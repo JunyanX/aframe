@@ -9,18 +9,18 @@ import json
 import sys
 
 from infer.aggregate import merge_timeseries
-from ledger.events import EventSet, RecoveredInjectionSet
+from ledger.events import EventSet, get_recovered_cls
 
 sys.stdout = sys.stderr = open(snakemake.log[0], "w", buffering=1)
 
 # Each group job has already split zero-lag branches out of its background
 # when a zero_lag output is requested. Otherwise, everything is in
 # background.hdf5 (useful for R&P analysis).
-# R&P foregrounds are plain EventSets, not RecoveredInjectionSets.
+# R&P foregrounds are plain EventSets, not recovered injection sets.
 foreground_cls = (
     EventSet
     if snakemake.params.analysis_type == "rnp"
-    else RecoveredInjectionSet
+    else get_recovered_cls(snakemake.params.waveform_type)
 )
 
 # Total row counts from each group's metadata, which saves opening

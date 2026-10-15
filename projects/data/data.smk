@@ -39,6 +39,14 @@ data_log_dir = log_dir / "data"
 
 DATA_CONTAINER = container("data")
 
+# The waveform family selects the generator and the ledger classes every
+# stage writes and reads. Shared with infer.smk and plots.smk.
+WAVEFORM_TYPE = config["waveform_type"]
+if WAVEFORM_TYPE not in ("cbc", "ringdown"):
+    raise WorkflowError(
+        f"waveform_type must be 'cbc' or 'ringdown', got {WAVEFORM_TYPE}"
+    )
+
 num_validation_jobs = int(config["num_validation_jobs"])
 validation_branch_ids = [str(i) for i in range(num_validation_jobs)]
 
@@ -343,6 +351,7 @@ the rejected parameters for this branch.
         buffer=config["buffer"],
         max_num_samples=config["max_num_samples"],
         seed=config["seed"],
+        waveform_type=WAVEFORM_TYPE,
     shell:
         "generate-testing-waveforms"
         " --start {params.start}"
@@ -366,6 +375,7 @@ the rejected parameters for this branch.
         " --seed {params.seed}"
         " --waveforms_file {output.waveforms}"
         " --rejected_file {output.rejected}"
+        " --waveform_type {params.waveform_type}"
         " &> {log}"
 
 
@@ -386,6 +396,7 @@ rule aggregate_testing_waveforms:
     params:
         ifos=config["ifos"],
         classes={"waveforms": "responses", "rejected_parameters": "parameters"},
+        waveform_type=WAVEFORM_TYPE,
     script:
         "scripts/aggregate_waveforms.py"
 
@@ -422,6 +433,7 @@ The PSDs are those of the last fetched train-background chunk.
         max_num_samples=config["max_num_samples"],
         # offset by branch so each branch samples different parameters
         seed=lambda wc: config["seed"] + int(wc.vbranch_id),
+        waveform_type=WAVEFORM_TYPE,
     shell:
         "generate-validation-waveforms"
         " --num_signals {params.num_signals}"
@@ -440,6 +452,7 @@ The PSDs are those of the last fetched train-background chunk.
         " --max_num_samples {params.max_num_samples}"
         " --seed {params.seed}"
         " --output_file {output}"
+        " --waveform_type {params.waveform_type}"
         " &> {log}"
 
 
@@ -462,6 +475,7 @@ rule aggregate_val_waveforms:
     params:
         ifos=config["ifos"],
         classes={"waveforms": "waveforms"},
+        waveform_type=WAVEFORM_TYPE,
     script:
         "scripts/aggregate_waveforms.py"
 
@@ -492,6 +506,7 @@ if config["pregenerate_training_waveforms"]:
             reference_frequency=config["reference_frequency"],
             waveform_approximant=config["waveform_approximant"],
             right_pad=config["right_pad"],
+            waveform_type=WAVEFORM_TYPE,
         shell:
             "generate-training-waveforms"
             " --num_signals {params.num_signals}"
@@ -503,6 +518,7 @@ if config["pregenerate_training_waveforms"]:
             " --waveform_approximant {params.waveform_approximant}"
             " --right_pad {params.right_pad}"
             " --output_file {output}"
+            " --waveform_type {params.waveform_type}"
             " &> {log}"
 
     rule aggregate_training_waveforms:
@@ -524,5 +540,6 @@ if config["pregenerate_training_waveforms"]:
         params:
             ifos=config["ifos"],
             classes={"waveforms": "polarizations"},
+            waveform_type=WAVEFORM_TYPE,
         script:
             "scripts/aggregate_waveforms.py"

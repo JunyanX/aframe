@@ -18,6 +18,10 @@ PRESETS = {
         root / "pipeline" / "config" / "review.yaml",
         root / "projects" / "train" / "train.yaml",
     ),
+    "ringdown": (
+        root / "pipeline" / "config" / "ringdown.yaml",
+        root / "projects" / "train" / "configs" / "ringdown.yaml",
+    ),
 }
 
 ONLINE_CONFIGS = [
@@ -196,7 +200,8 @@ def main():
         default=None,
         choices=[None, *PRESETS],
         help="Start from a preset run: `small` to check that the pipeline "
-        "runs, or `review` for a short run at production model size",
+        "runs, `review` for a short run at production model size, or "
+        "`ringdown` for a ringdown search",
     )
 
     # online subcommand
