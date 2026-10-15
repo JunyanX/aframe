@@ -53,6 +53,7 @@ vizapp-cuda = [
 
 [project.scripts]
 sensitive-volume = "plots.cli:main"
+ringdown-sensitive-volume = "plots.cli:ringdown_main"
 vizapp = "plots.vizapp.main:cli"
 
 [dependency-groups]
