@@ -14,10 +14,11 @@ or rnp (Rates and Populations frames).
 import json
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 import h5py
 import jsonargparse
-from ledger.events import EventSet, RecoveredInjectionSet
+from ledger.events import EventSet, get_recovered_cls
 from utils.logging import configure_logging
 
 from infer.aggregate import merge_timeseries, write_timeseries
@@ -64,6 +65,7 @@ def _run_branch(client, cfg, branch_id, branch, outdir, rate=None):
             cfg.inference_sampling_rate,
             cfg.batch_size,
             rate=rate,
+            waveform_type=cfg.waveform_type,
         )
     client.callback = seq
     postproc = Postprocessor(
@@ -116,9 +118,11 @@ def _merge_group(cfg, branches, scratch):
             zero_lag.append(fname)
         else:
             background.append(fname)
-    # R&P foregrounds are plain EventSets, not RecoveredInjectionSets.
+    # R&P foregrounds are plain EventSets, not recovered injection sets.
     foreground_cls = (
-        EventSet if cfg.analysis_type == "rnp" else RecoveredInjectionSet
+        EventSet
+        if cfg.analysis_type == "rnp"
+        else get_recovered_cls(cfg.waveform_type)
     )
 
     event_sets = {
@@ -179,6 +183,9 @@ def _shared_args(p):
     p.add_argument("--waveforms", type=str, nargs="*", default=[])
     p.add_argument("--branches", type=str)
     p.add_argument("--analysis_type", type=str, default="hdf5")
+    p.add_argument(
+        "--waveform_type", type=Literal["cbc", "ringdown"], default="cbc"
+    )
     p.add_argument("--background_out", type=str)
     p.add_argument("--foreground_out", type=str)
     p.add_argument("--metadata_out", type=str)

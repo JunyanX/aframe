@@ -9,8 +9,12 @@ from zlib import adler32
 import h5py
 import numpy as np
 from gwpy.timeseries import TimeSeriesDict
-from ledger.events import EventSet, RecoveredInjectionSet
-from ledger.injections import InterferometerResponseSet, waveform_class_factory
+from ledger.events import EventSet, get_recovered_cls
+from ledger.injections import (
+    InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
+    waveform_class_factory,
+)
 
 FNAME_PATTERNS = {
     "prefix": "[a-zA-Z0-9_:-]+",
@@ -21,6 +25,16 @@ FNAME_PATTERNS = {
 FNAME_GROUPS = {k: f"(?P<{k}>{v})" for k, v in FNAME_PATTERNS.items()}
 FNAME_PATTERN = "{prefix}-{start}-{duration}.{suffix}".format(**FNAME_GROUPS)
 FNAME_RE = re.compile(FNAME_PATTERN)
+
+
+def response_set_cls_for(ifos, waveform_type):
+    """The response set class a campaign of this family was written with."""
+    base_cls = (
+        RingdownInterferometerResponseSet
+        if waveform_type == "ringdown"
+        else InterferometerResponseSet
+    )
+    return waveform_class_factory(ifos, base_cls, "ResponseSet")
 
 
 def _throttle(deadline: float, interval: float) -> float:
@@ -165,6 +179,7 @@ class Hdf5Sequence(BaseSequence):
         inference_sampling_rate: float,
         batch_size: int,
         rate: float | None = None,
+        waveform_type: str = "cbc",
     ):
         """
         Iterate over a background segment, performing timeshifts, optionally
@@ -189,6 +204,9 @@ class Hdf5Sequence(BaseSequence):
                 Number of inference requests to send to the model at once
             rate:
                 Rate at which to send requests in Hz
+            waveform_type:
+                Family the injection set was generated from, which selects
+                the ledger classes used to read and recover it.
         """
         logging.info("Initializing sequence")
         super().__init__(
@@ -199,6 +217,7 @@ class Hdf5Sequence(BaseSequence):
             injection_set_fname=injection_set_fname,
             ifos=ifos,
             shifts=shifts,
+            waveform_type=waveform_type,
         )
         # with no injections, mark the foreground sequence already complete
         if self.injection_set is None:
@@ -211,9 +230,11 @@ class Hdf5Sequence(BaseSequence):
         injection_set_fname: str | None,
         ifos: list[str],
         shifts: list[float],
+        waveform_type: str = "cbc",
     ):
         self.background_fname = background_fname
         self.ifos = ifos
+        self.waveform_type = waveform_type
 
         if len(ifos) != len(shifts):
             raise ValueError(
@@ -230,11 +251,7 @@ class Hdf5Sequence(BaseSequence):
             self.duration = self.size / self.sample_rate
 
         # load injections up front. None means skip inference on injections
-        cls = waveform_class_factory(
-            ifos,
-            InterferometerResponseSet,
-            "ResponseSet",
-        )
+        cls = response_set_cls_for(ifos, waveform_type)
         injection_set = cls()
         if injection_set_fname is not None:
             injection_set = cls.read(
@@ -287,8 +304,9 @@ class Hdf5Sequence(BaseSequence):
                 deadline = _throttle(deadline, interval)
                 yield x, x_inj
 
-    def recover(self, foreground: EventSet) -> RecoveredInjectionSet:
-        return RecoveredInjectionSet.recover(foreground, self.injection_set)
+    def recover(self, foreground: EventSet):
+        cls = get_recovered_cls(self.waveform_type)
+        return cls.recover(foreground, self.injection_set)
 
 
 class RnPSequence(BaseSequence):
