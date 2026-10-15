@@ -2,7 +2,17 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
-from ledger.injections import BilbyParameterSet, _WaveformGenerator
+from ledger.injections import (
+    BilbyParameterSet,
+    InjectionParameterSet,
+    InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
+    RingdownWaveformPolarizationSet,
+    RingdownWaveformSet,
+    WaveformSet,
+    _WaveformGenerator,
+    waveform_class_factory,
+)
 
 
 @pytest.fixture
@@ -47,6 +57,75 @@ def test_parameter_conversion(bilby_param_set, reference_frequency):
         np.allclose(
             getattr(bilby_param_set, key), getattr(new_params, key), rtol=1e-16
         )
+
+
+class TestRingdownWaveformPolarizationSet:
+    @pytest.fixture
+    def ringdown_waveforms(self):
+        num_waveforms = 2
+        sample_rate = 128
+        duration = 1
+        waveform_size = int(sample_rate * duration)
+        return RingdownWaveformPolarizationSet(
+            frequency=np.array([20, 30]),
+            quality=np.array([10, 15]),
+            epsilon=np.array([0.01, 0.02]),
+            phase=np.array([0, np.pi / 4]),
+            inclination=np.array([np.pi / 3, np.pi / 2]),
+            distance=np.array([100, 200]),
+            ra=np.array([0.1, 0.2]),
+            dec=np.array([-0.1, 0.1]),
+            psi=np.array([0.3, 0.4]),
+            cross=np.ones((num_waveforms, waveform_size)),
+            plus=2 * np.ones((num_waveforms, waveform_size)),
+            sample_rate=sample_rate,
+            duration=duration,
+            right_pad=0.5,
+            num_injections=num_waveforms,
+        )
+
+    def test_waveforms(self, ringdown_waveforms):
+        waveforms = ringdown_waveforms.get_waveforms()
+
+        assert len(ringdown_waveforms) == 2
+        assert ringdown_waveforms.waveform_duration == 1
+        assert waveforms.shape == (2, 2, 128)
+        np.testing.assert_array_equal(waveforms[:, 0], 1)
+        np.testing.assert_array_equal(waveforms[:, 1], 2)
+
+    def test_hdf5_round_trip(self, ringdown_waveforms, tmp_path):
+        fname = tmp_path / "ringdown-waveforms.hdf5"
+        ringdown_waveforms.write(fname)
+        loaded = RingdownWaveformPolarizationSet.read(fname)
+
+        assert len(loaded) == len(ringdown_waveforms)
+        for name, field in ringdown_waveforms.__dataclass_fields__.items():
+            expected = getattr(ringdown_waveforms, name)
+            actual = getattr(loaded, name)
+            if field.metadata["kind"] == "metadata":
+                assert actual == expected
+            else:
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_rejects_unequal_parameter_lengths(self, ringdown_waveforms):
+        kwargs = {
+            name: getattr(ringdown_waveforms, name)
+            for name in ringdown_waveforms.__dataclass_fields__
+        }
+        kwargs["frequency"] = np.array([20])
+
+        with pytest.raises(ValueError, match="entries, expected"):
+            RingdownWaveformPolarizationSet(**kwargs)
+
+    def test_rejects_inconsistent_waveform_duration(self, ringdown_waveforms):
+        kwargs = {
+            name: getattr(ringdown_waveforms, name)
+            for name in ringdown_waveforms.__dataclass_fields__
+        }
+        kwargs["cross"] = np.ones((2, 64))
+
+        with pytest.raises(ValueError, match="Specified waveform duration"):
+            RingdownWaveformPolarizationSet(**kwargs)
 
 
 class TestWaveformGenerator:
@@ -322,3 +401,550 @@ class TestLigoResponseSet:
 
             if i == 4:
                 assert wave_end == (x.shape[-1] + sample_rate)
+
+
+# Field order is part of the on-disk contract for every archive written
+# before the SnrParameterSet mixin was extracted, so pin it explicitly.
+CBC_INJECTION_FIELDS = [
+    "mass_1",
+    "mass_2",
+    "a_1",
+    "a_2",
+    "tilt_1",
+    "tilt_2",
+    "phi_12",
+    "phi_jl",
+    "ra",
+    "dec",
+    "redshift",
+    "psi",
+    "theta_jn",
+    "phase",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+]
+
+
+def test_snr_mixin_preserves_cbc_field_order():
+    fields = list(InjectionParameterSet.__dataclass_fields__)
+    assert fields == CBC_INJECTION_FIELDS
+
+
+CBC_RESPONSE_SET_FIELDS = [
+    "mass_1",
+    "mass_2",
+    "a_1",
+    "a_2",
+    "tilt_1",
+    "tilt_2",
+    "phi_12",
+    "phi_jl",
+    "ra",
+    "dec",
+    "redshift",
+    "psi",
+    "theta_jn",
+    "phase",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+    "sample_rate",
+    "duration",
+    "right_pad",
+    "num_injections",
+    "injection_time",
+    "shift",
+]
+
+
+def test_response_set_field_order_is_stable():
+    """Splitting the timing behaviour out must not reorder the fields.
+
+    Ledger reads and writes by name, but `RecoveredInjectionSet`
+    (ledger/events.py:240) mixes this class with `EventSet`, and the
+    dataclass MRO decides the field order that both of them see.
+    """
+    assert (
+        list(InterferometerResponseSet.__dataclass_fields__)
+        == CBC_RESPONSE_SET_FIELDS
+    )
+
+
+def test_response_set_factory_appends_ifo_fields(response_set_cls):
+    assert list(response_set_cls.__dataclass_fields__) == (
+        CBC_RESPONSE_SET_FIELDS + ["h1", "l1"]
+    )
+
+
+def test_mismatched_waveform_classes_fail_loudly(tmp_path):
+    """Reading a file with the wrong ledger class must raise, not mis-load.
+
+    The validation consumer adds waveform channels straight onto detector
+    background, so a partial or mis-channelled load would corrupt training
+    silently. Every declared field is looked up by name at read time, so a
+    mismatch raises instead.
+    """
+    num, sample_rate, duration = 2, 128, 1
+    size = int(sample_rate * duration)
+    params = {
+        "frequency": np.array([200.0, 300.0]),
+        "quality": np.array([10.0, 15.0]),
+        "epsilon": np.array([0.01, 0.02]),
+        "phase": np.array([0.0, 0.5]),
+        "inclination": np.array([0.3, 0.7]),
+        "distance": np.array([100.0, 200.0]),
+        "ra": np.array([0.1, 0.2]),
+        "dec": np.array([-0.1, 0.1]),
+        "psi": np.array([0.3, 0.4]),
+    }
+    meta = {
+        "sample_rate": sample_rate,
+        "duration": duration,
+        "right_pad": 0.5,
+        "num_injections": num,
+    }
+
+    polarizations = RingdownWaveformPolarizationSet(
+        **params,
+        cross=np.ones((num, size)),
+        plus=2 * np.ones((num, size)),
+        **meta,
+    )
+    polarization_file = tmp_path / "polarizations.hdf5"
+    polarizations.write(polarization_file)
+
+    ringdown_cls = waveform_class_factory(
+        ["h1", "l1"], RingdownWaveformSet, "IfoRingdownWaveformSet"
+    )
+    per_ifo = ringdown_cls(
+        **params,
+        snr=np.array([8.0, 12.0]),
+        ifo_snrs=np.array([[6.0, 5.0], [9.0, 8.0]]),
+        ifos=["h1", "l1"],
+        h1=np.ones((num, size)),
+        l1=2 * np.ones((num, size)),
+        **meta,
+    )
+    per_ifo_file = tmp_path / "per_ifo.hdf5"
+    per_ifo.write(per_ifo_file)
+
+    # a training-style cross/plus file is not a validation file
+    with pytest.raises(ValueError, match="no dataset"):
+        ringdown_cls.read(polarization_file)
+
+    # and vice versa
+    with pytest.raises(ValueError, match="no dataset"):
+        RingdownWaveformPolarizationSet.read(per_ifo_file)
+
+    # nor is a ringdown validation file readable as a CBC one
+    cbc_cls = waveform_class_factory(
+        ["h1", "l1"], WaveformSet, "IfoWaveformSet"
+    )
+    with pytest.raises(ValueError, match="no dataset"):
+        cbc_cls.read(per_ifo_file)
+
+
+def test_ringdown_set_carries_no_cbc_parameters():
+    fields = set(RingdownWaveformSet.__dataclass_fields__)
+    cbc_only = {
+        "mass_1",
+        "mass_2",
+        "a_1",
+        "a_2",
+        "tilt_1",
+        "tilt_2",
+        "phi_12",
+        "phi_jl",
+        "redshift",
+        "theta_jn",
+    }
+    assert not fields & cbc_only
+    assert {"snr", "ifo_snrs", "ifos"} <= fields
+
+
+class TestRingdownWaveformSet:
+    @pytest.fixture
+    def ifo_ringdown_cls(self):
+        return waveform_class_factory(
+            ["h1", "l1"],
+            RingdownWaveformSet,
+            cls_name="IfoRingdownWaveformSet",
+        )
+
+    @pytest.fixture
+    def ringdown_set(self, ifo_ringdown_cls):
+        num_waveforms = 2
+        sample_rate = 128
+        duration = 1
+        waveform_size = int(sample_rate * duration)
+        return ifo_ringdown_cls(
+            frequency=np.array([20, 30]),
+            quality=np.array([10, 15]),
+            epsilon=np.array([0.01, 0.02]),
+            phase=np.array([0, np.pi / 4]),
+            inclination=np.array([np.pi / 3, np.pi / 2]),
+            distance=np.array([100, 200]),
+            ra=np.array([0.1, 0.2]),
+            dec=np.array([-0.1, 0.1]),
+            psi=np.array([0.3, 0.4]),
+            snr=np.array([8.0, 12.0]),
+            ifo_snrs=np.array([[6.0, 5.0], [9.0, 8.0]]),
+            ifos=["h1", "l1"],
+            h1=np.ones((num_waveforms, waveform_size)),
+            l1=2 * np.ones((num_waveforms, waveform_size)),
+            sample_rate=sample_rate,
+            duration=duration,
+            right_pad=0.5,
+            num_injections=num_waveforms,
+        )
+
+    def test_waveforms_are_per_ifo_in_alphabetical_order(self, ringdown_set):
+        waveforms = ringdown_set.waveforms
+
+        assert len(ringdown_set) == 2
+        assert ringdown_set.num_waveform_fields() == 2
+        assert sorted(ringdown_set.waveform_fields) == ["h1", "l1"]
+        assert waveforms.shape == (2, 2, 128)
+        # Channels are stacked alphabetically by field name, while the
+        # validation background is stacked in config `ifos` order and the two
+        # are added element-wise. They only coincide when `ifos` is already
+        # sorted, so pin the order the ledger side promises.
+        np.testing.assert_array_equal(waveforms[:, 0], 1)
+        np.testing.assert_array_equal(waveforms[:, 1], 2)
+
+    def test_carries_snr_fields(self, ringdown_set):
+        assert ringdown_set.ifos == ["h1", "l1"]
+        np.testing.assert_array_equal(ringdown_set.snr, [8.0, 12.0])
+        assert ringdown_set.ifo_snrs.shape == (2, 2)
+
+    def test_hdf5_round_trip(self, ringdown_set, ifo_ringdown_cls, tmp_path):
+        fname = tmp_path / "ringdown-val-waveforms.hdf5"
+        ringdown_set.write(fname)
+        loaded = ifo_ringdown_cls.read(fname)
+
+        assert len(loaded) == len(ringdown_set)
+        for name, field in ringdown_set.__dataclass_fields__.items():
+            expected = getattr(ringdown_set, name)
+            actual = getattr(loaded, name)
+            if field.metadata["kind"] == "metadata":
+                if name == "ifos":
+                    assert list(actual) == list(expected)
+                else:
+                    assert actual == expected
+            else:
+                np.testing.assert_array_equal(actual, expected)
+
+    def test_rejects_inconsistent_waveform_duration(self, ringdown_set):
+        kwargs = {
+            name: getattr(ringdown_set, name)
+            for name in ringdown_set.__dataclass_fields__
+        }
+        kwargs["h1"] = np.ones((2, 64))
+
+        with pytest.raises(ValueError, match="Specified waveform duration"):
+            type(ringdown_set)(**kwargs)
+
+
+RINGDOWN_RESPONSE_SET_FIELDS = [
+    "frequency",
+    "quality",
+    "epsilon",
+    "phase",
+    "inclination",
+    "distance",
+    "ra",
+    "dec",
+    "psi",
+    "snr",
+    "ifo_snrs",
+    "ifos",
+    "sample_rate",
+    "duration",
+    "right_pad",
+    "num_injections",
+    "injection_time",
+    "shift",
+]
+
+
+class TestRingdownResponseSet:
+    """The ringdown counterpart of TestLigoResponseSet.
+
+    Only covers what the split has to preserve: the parameter schema, and
+    the four timing/injection methods now inherited from ResponseSetBase.
+    """
+
+    @pytest.fixture
+    def duration(self):
+        return 2
+
+    @pytest.fixture
+    def sample_rate(self):
+        return 128
+
+    @pytest.fixture
+    def ringdown_response_cls(self):
+        return waveform_class_factory(
+            ["h1", "l1"],
+            RingdownInterferometerResponseSet,
+            cls_name="LigoRingdownResponseSet",
+        )
+
+    @staticmethod
+    def build(cls, times, sample_rate, duration, shifts=None, frequency=None):
+        """A response set with a distinct constant waveform per detector.
+
+        h1 is filled with 1.0 and l1 with 2.0 so an injection test can tell
+        the channels apart and assert exact sample placement.
+        """
+        n = len(times)
+        size = int(duration * sample_rate)
+        kwargs = {}
+        for name, attr in cls.__dataclass_fields__.items():
+            kind = attr.metadata["kind"]
+            if kind == "parameter":
+                kwargs[name] = np.zeros((n,))
+            elif kind == "waveform":
+                kwargs[name] = np.zeros((n, size))
+
+        kwargs["injection_time"] = np.asarray(times, dtype=float)
+        if shifts is None:
+            shifts = np.repeat(np.array([[0.0, 1.0]]), n, axis=0)
+        kwargs["shift"] = np.asarray(shifts, dtype=float)
+        if frequency is not None:
+            kwargs["frequency"] = np.asarray(frequency, dtype=float)
+        kwargs["h1"] = np.ones((n, size))
+        kwargs["l1"] = 2 * np.ones((n, size))
+
+        return cls(
+            sample_rate=sample_rate,
+            duration=duration,
+            num_injections=n,
+            right_pad=duration / 2,
+            **kwargs,
+        )
+
+    @pytest.fixture
+    def response_set(self, ringdown_response_cls, duration, sample_rate):
+        return self.build(
+            ringdown_response_cls,
+            [10.0, 20.0, 30.0, 40.0],
+            sample_rate,
+            duration,
+            shifts=[[0.0, 0.0], [0.0, 1.0], [0.0, 0.0], [0.0, 1.0]],
+            frequency=[200.0, 210.0, 220.0, 230.0],
+        )
+
+    def test_field_order(self, ringdown_response_cls):
+        assert list(ringdown_response_cls.__dataclass_fields__) == (
+            RINGDOWN_RESPONSE_SET_FIELDS + ["h1", "l1"]
+        )
+
+    def test_carries_no_cbc_parameters(self, ringdown_response_cls):
+        fields = set(ringdown_response_cls.__dataclass_fields__)
+        assert not fields & {"mass_1", "mass_2", "a_1", "theta_jn", "redshift"}
+
+    def test_get_shift(self, response_set):
+        shifted = response_set.get_shift(np.array([0.0, 1.0]))
+        assert len(shifted) == 2
+        np.testing.assert_array_equal(shifted.injection_time, [20.0, 40.0])
+        np.testing.assert_array_equal(shifted.frequency, [210.0, 230.0])
+
+    def test_get_times(self, response_set):
+        within = response_set.get_times(start=15.0, end=35.0)
+        np.testing.assert_array_equal(within.injection_time, [20.0, 30.0])
+
+    def test_read_round_trip_with_shifts(
+        self, response_set, ringdown_response_cls, tmp_path
+    ):
+        fname = tmp_path / "ringdown-response-set.hdf5"
+        response_set.write(fname)
+
+        loaded = ringdown_response_cls.read(fname)
+        assert len(loaded) == 4
+        np.testing.assert_array_equal(loaded.frequency, response_set.frequency)
+
+        sliced = ringdown_response_cls.read(fname, shifts=[0.0, 1.0])
+        assert len(sliced) == 2
+        np.testing.assert_array_equal(sliced.frequency, [210.0, 230.0])
+
+    def test_inject_writes_each_detector_at_the_expected_samples(
+        self, response_set, sample_rate
+    ):
+        """Assert placement, not merely that something was written.
+
+        A waveform spans `duration` seconds and is anchored so its first
+        sample lands `duration - right_pad` before the injection time. With
+        sample_rate=128, duration=2, right_pad=1 that puts an injection at
+        t=10 s in samples [10*128 - 128, +256) = [1152, 1408). The spans
+        below were confirmed by running `inject` against these inputs.
+        """
+        background = np.zeros((2, 60 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        spans = [(1152, 1408), (2432, 2688), (3712, 3968), (4992, 5248)]
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            marked = np.zeros(injected.shape[-1], dtype=bool)
+            for lo, hi in spans:
+                np.testing.assert_allclose(injected[channel, lo:hi], value)
+                marked[lo:hi] = True
+            # and nothing anywhere else
+            np.testing.assert_allclose(injected[channel, ~marked], 0.0)
+
+    def test_inject_trims_an_injection_that_precedes_the_chunk(
+        self, ringdown_response_cls, sample_rate, duration
+    ):
+        """An injection whose window opens before the chunk start.
+
+        `inject` pads the array, writes, then trims back. At t=0.5 s the
+        window opens at -0.5 s, so the leading 64 samples fall outside the
+        chunk and the remaining 192 land at the very start of the output.
+        """
+        response_set = self.build(
+            ringdown_response_cls, [0.5], sample_rate, duration
+        )
+        background = np.zeros((2, 10 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            np.testing.assert_allclose(injected[channel, :192], value)
+            np.testing.assert_allclose(injected[channel, 192:], 0.0)
+
+    def test_inject_trims_an_injection_that_overruns_the_chunk(
+        self, ringdown_response_cls, sample_rate, duration
+    ):
+        """The mirror case: at t=9.5 s in a 10 s chunk the window closes at
+        10.5 s, so the trailing 64 samples are cut and 192 land at the end.
+        """
+        response_set = self.build(
+            ringdown_response_cls, [9.5], sample_rate, duration
+        )
+        background = np.zeros((2, 10 * sample_rate))
+
+        injected = response_set.inject(background, start=0.0)
+
+        assert injected.shape == background.shape
+        for channel, value in ((0, 1.0), (1, 2.0)):
+            np.testing.assert_allclose(injected[channel, 1088:], value)
+            np.testing.assert_allclose(injected[channel, :1088], 0.0)
+
+
+class TestRingdownRemnantProperties:
+    @pytest.fixture
+    def params(self):
+        from ledger.injections import RingdownParameterSet
+
+        n = 3
+        return RingdownParameterSet(
+            frequency=np.array([150.0, 300.0, 600.0]),
+            quality=np.array([10.0, 14.0, 18.0]),
+            epsilon=np.full(n, 0.05),
+            phase=np.zeros(n),
+            inclination=np.zeros(n),
+            distance=np.array([100.0, 500.0, 1000.0]),
+            ra=np.zeros(n),
+            dec=np.zeros(n),
+            psi=np.zeros(n),
+        )
+
+    def test_remnant_spin_matches_closed_form(self, params):
+        expected = 1 - (2 / params.quality) ** (20 / 9)
+        np.testing.assert_allclose(params.remnant_spin, expected, rtol=1e-12)
+
+    def test_remnant_mass_known_values(self, params):
+        # ml4gw ringdown.py:79-84 inverted, converted to Msun
+        np.testing.assert_allclose(
+            params.remnant_mass,
+            np.array([169.0, 89.16, 46.01]),
+            rtol=1e-3,
+        )
+
+    def test_roundtrip_mass_spin_to_frequency_quality(self, params):
+        from ledger.injections import MSUN, C, G
+
+        m, chi = params.remnant_mass, params.remnant_spin
+        q = 2 * (1 - chi) ** -0.45
+        f = (
+            (1 / (2 * np.pi))
+            * (C**3 / (G * m * MSUN))
+            * (1 - 0.63 * (1 - chi) ** 0.3)
+        )
+        np.testing.assert_allclose(q, params.quality, rtol=1e-10)
+        np.testing.assert_allclose(f, params.frequency, rtol=1e-10)
+
+    def test_redshift_from_distance(self, params):
+        from astropy.cosmology import z_at_value
+        from astropy.units import Mpc
+        from utils.cosmology import DEFAULT_COSMOLOGY
+
+        expected = z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, params.distance * Mpc
+        ).value
+        np.testing.assert_allclose(params.redshift, expected, rtol=1e-12)
+
+    def test_source_frame_is_detector_over_one_plus_z(self, params):
+        np.testing.assert_allclose(
+            params.remnant_mass_source,
+            params.remnant_mass / (1 + params.redshift),
+            rtol=1e-12,
+        )
+
+    def test_properties_are_not_cached(self, params):
+        first = params.redshift.copy()
+        params.distance = np.array([1000.0, 1000.0, 1000.0])
+        second = params.redshift
+        assert not np.allclose(first, second)
+        assert second.shape == params.distance.shape
+
+    def test_properties_survive_append(self, params):
+        from ledger.injections import RingdownParameterSet
+
+        _ = params.remnant_mass_source  # force one evaluation first
+        params.append(
+            RingdownParameterSet(
+                frequency=np.array([200.0]),
+                quality=np.array([12.0]),
+                epsilon=np.array([0.05]),
+                phase=np.array([0.0]),
+                inclination=np.array([0.0]),
+                distance=np.array([300.0]),
+                ra=np.array([0.0]),
+                dec=np.array([0.0]),
+                psi=np.array([0.0]),
+            )
+        )
+        assert len(params.remnant_mass_source) == 4
+        assert len(params.redshift) == 4
+
+    def test_redshift_empty_ledger(self):
+        from ledger.injections import RingdownParameterSet
+
+        empty = RingdownParameterSet()
+        redshift = empty.redshift
+        assert redshift.shape == (0,)
+        assert redshift.dtype == np.float64
+
+    def test_remnant_mass_source_empty_ledger(self):
+        from ledger.injections import RingdownParameterSet
+
+        empty = RingdownParameterSet()
+        remnant_mass_source = empty.remnant_mass_source
+        assert remnant_mass_source.shape == (0,)
+        assert remnant_mass_source.dtype == np.float64
+
+    def test_redshift_empty_slice(self, params):
+        empty = params[:0]
+        redshift = empty.redshift
+        assert redshift.shape == (0,)
+        assert redshift.dtype == np.float64
+
+    def test_remnant_mass_source_empty_slice(self, params):
+        empty = params[:0]
+        remnant_mass_source = empty.remnant_mass_source
+        assert remnant_mass_source.shape == (0,)
+        assert remnant_mass_source.dtype == np.float64

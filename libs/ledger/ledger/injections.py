@@ -9,8 +9,16 @@ from utils.cosmology import DEFAULT_COSMOLOGY
 
 from ledger.ledger import PATH, Ledger, metadata, parameter, waveform
 
+# Physical constants, copied verbatim from ml4gw/constants.py so that the
+# remnant mass below is the exact inverse of the transform
+# ml4gw/waveforms/adhoc/ringdown.py:79-84 used to generate the waveform.
+# projects/data/tests/waveforms/test_ringdown.py pins them to ml4gw's.
 # Solar mass in kg
 MSUN = 1.988409902147041637325262574352366540e30
+# Newton's constant in m^3 / kg / s^2
+G = 6.67430e-11
+# Speed of light in m / s
+C = 299792458.0
 
 
 def shift_mask(shifts: np.ndarray, target) -> np.ndarray:
@@ -241,6 +249,85 @@ class BilbyParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
 
 
 @dataclass
+class RingdownParameterSet(Ledger):
+    """Parameters used to generate and project ringdown waveforms.
+
+    Attributes:
+        frequency: Central ringdown frequency in Hz.
+        quality: Ringdown quality factor.
+        epsilon: Fraction of the remnant mass radiated in the ringdown.
+        phase: Initial ringdown phase in radians.
+        inclination: Source inclination in radians.
+        distance: Luminosity distance in Mpc.
+        ra: Right ascension in radians.
+        dec: Declination in radians.
+        psi: Polarization angle in radians.
+    """
+
+    frequency: np.ndarray = parameter()
+    quality: np.ndarray = parameter()
+    epsilon: np.ndarray = parameter()
+    phase: np.ndarray = parameter()
+    inclination: np.ndarray = parameter()
+    distance: np.ndarray = parameter()
+    ra: np.ndarray = parameter()
+    dec: np.ndarray = parameter()
+    psi: np.ndarray = parameter()
+
+    @property
+    def remnant_spin(self):
+        """Dimensionless remnant spin, inverted from the quality factor.
+
+        The inverse of the Echeverria/Finn fit ml4gw applies in
+        `ml4gw/waveforms/adhoc/ringdown.py:79`.
+        """
+        return 1 - (2 / self.quality) ** (20 / 9)
+
+    @property
+    def remnant_mass(self):
+        """Remnant mass in solar masses, detector frame.
+
+        The inverse of `ml4gw/waveforms/adhoc/ringdown.py:80-84`, converted
+        from kg. Detector frame because `ringdown_prior` samples frequency
+        in the detector frame (`detector_frame_prior = True`).
+        """
+        return (
+            (1 / (2 * np.pi))
+            * (C**3 / (G * self.frequency))
+            * (1 - 0.63 * (2 / self.quality) ** (2 / 3))
+            / MSUN
+        )
+
+    @property
+    def redshift(self):
+        """Redshift implied by the sampled luminosity distance.
+
+        Uses DEFAULT_COSMOLOGY. A property takes no arguments, so this is
+        deliberately not caller-configurable; the cosmology parameter on
+        `LALParameterSet.redshift` is unreachable and is not copied here.
+        Not cached: `Ledger.append` replaces the field arrays without
+        clearing caches, so a cached value would go stale and change shape.
+        Guarded for an empty ledger: `z_at_value` raises on a zero-sized
+        input, but an empty rejection ledger is a supported pipeline state
+        (`rejection_sample` writes one whenever a branch rejects nothing).
+        """
+        if self.distance.size == 0:
+            return np.array([], dtype=np.float64)
+        return z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, self.distance * Mpc
+        ).value
+
+    @property
+    def remnant_mass_source(self):
+        """Remnant mass in solar masses, source frame.
+
+        The quantity CBC's sensitive volume bins on
+        (`projects/plots/plots/legacy/main.py:104-108`).
+        """
+        return self.remnant_mass / (1 + self.redshift)
+
+
+@dataclass
 class LALParameterSet(Ledger):
     """Binary parameters with LAL convention.
 
@@ -392,7 +479,8 @@ class InjectionMetadata(Ledger):
     Attributes:
         sample_rate: Waveform sampling rate in Hz.
         duration: Waveform duration in seconds.
-        right_pad: Time from coalescence to right edge in seconds.
+        right_pad: Time from the signal defining point to the right edge in
+            seconds.
         num_injections: Total number of injections generated.
     """
 
@@ -457,6 +545,28 @@ class InjectionMetadata(Ledger):
                 return ours
             return ours + theirs
         return super().compare_metadata(key, ours, theirs)
+
+
+@dataclass
+class RingdownWaveformPolarizationSet(InjectionMetadata, RingdownParameterSet):
+    """Ringdown polarizations and the parameters used to generate them.
+
+    Attributes:
+        cross: Cross-polarization waveform array.
+        plus: Plus-polarization waveform array.
+    """
+
+    cross: np.ndarray = waveform()
+    plus: np.ndarray = waveform()
+
+    @property
+    def waveform_duration(self):
+        """Calculate waveform duration from array length and sample rate."""
+        return self.cross.shape[-1] / self.sample_rate
+
+    def get_waveforms(self) -> np.ndarray:
+        """Get waveforms with shape (num_injections, 2, num_samples)."""
+        return np.stack([self.cross, self.plus], axis=-2)
 
 
 @dataclass(frozen=True)
@@ -673,11 +783,11 @@ class WaveformPolarizationSet(InjectionMetadata, BilbyParameterSet):
 
 
 @dataclass
-class InjectionParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
-    """Intrinsic and extrinsic parameters for injection campaign.
+class SnrParameterSet(Ledger):
+    """SNR information for an injection campaign.
 
-    Combines extrinsic and intrinsic parameters along with SNR information
-    for injections into detector data.
+    Mixed into any parameter set whose injections have been projected onto a
+    detector network, so that these fields are declared in one place.
 
     Attributes:
         snr: Overall signal-to-noise ratio.
@@ -706,11 +816,33 @@ class InjectionParameterSet(ExtrinsicParameterSet, IntrinsicParameterSet):
 
 
 @dataclass
-class WaveformSet(InjectionMetadata, InjectionParameterSet):
-    """A set of waveform polarizations along with their metadata.
+class InjectionParameterSet(
+    SnrParameterSet, ExtrinsicParameterSet, IntrinsicParameterSet
+):
+    """Intrinsic and extrinsic parameters for injection campaign.
 
-    Stores both polarizations of gravitational wave strain for injections
-    along with their parameters, SNRs, and metadata.
+    Combines extrinsic and intrinsic parameters with the SNR information
+    from `SnrParameterSet` for injections into detector data.
+    """
+
+
+@dataclass
+class RingdownInjectionParameterSet(SnrParameterSet, RingdownParameterSet):
+    """Ringdown parameters for an injection campaign.
+
+    The ringdown counterpart of `InjectionParameterSet`: the parameters
+    consumed by `ml4gw.waveforms.Ringdown` plus sky location, along with the
+    SNRs measured after projecting onto a detector network.
+    """
+
+
+@dataclass
+class WaveformSetBase(InjectionMetadata):
+    """Waveform stacking behaviour, independent of the parameter set.
+
+    Holds everything about a set of waveforms that does not depend on which
+    parameters generated them, so that CBC and ringdown sets share one
+    implementation.
     """
 
     def __post_init__(self):
@@ -746,18 +878,33 @@ class WaveformSet(InjectionMetadata, InjectionParameterSet):
         return len(self.waveform_fields)
 
 
-# TODO: rename this to InjectionCampaign
 @dataclass
-class InterferometerResponseSet(WaveformSet):
-    """Waveforms projected onto specific interferometers.
+class WaveformSet(WaveformSetBase, InjectionParameterSet):
+    """A set of waveform polarizations along with their metadata.
 
-    Represents a set of projected waveforms to be used in an injection
-    campaign, along with the times and shifts for each injection.
+    Stores both polarizations of gravitational wave strain for injections
+    along with their parameters, SNRs, and metadata.
+    """
 
-    Note:
-        Dataclass inheritance order (last to first) determines field ordering:
-        mass1, mass2, ..., ra, dec, psi, injection_time, shift, sample_rate,
-        h1, l1
+
+@dataclass
+class RingdownWaveformSet(WaveformSetBase, RingdownInjectionParameterSet):
+    """A set of ringdown waveforms along with their metadata.
+
+    The ringdown counterpart of `WaveformSet`. Pass it to
+    `waveform_class_factory` to add one waveform field per interferometer,
+    for waveforms that have already been projected onto a detector network.
+    """
+
+
+@dataclass
+class ResponseSetBase(WaveformSetBase):
+    """Injection timing and strain injection, independent of the parameters.
+
+    The counterpart of `WaveformSetBase` for waveforms that have been placed
+    into a timeseries. It holds when each injection happens and how the
+    detectors were shifted, plus every method that needs only those, so that
+    CBC and ringdown response sets share one implementation.
     """
 
     injection_time: np.ndarray = parameter()
@@ -957,6 +1104,32 @@ class InterferometerResponseSet(WaveformSet):
             stop = -stop or None
             x = x[:, start:stop]
         return x
+
+
+# TODO: rename this to InjectionCampaign
+@dataclass
+class InterferometerResponseSet(ResponseSetBase, WaveformSet):
+    """CBC waveforms projected onto specific interferometers.
+
+    Represents a set of projected waveforms to be used in an injection
+    campaign, along with the times and shifts for each injection.
+
+    Note:
+        Dataclass inheritance order (last to first) determines field
+        ordering: mass_1, mass_2, ..., ra, dec, psi, snr, ifo_snrs, ifos,
+        sample_rate, duration, right_pad, num_injections, injection_time,
+        shift, then one field per interferometer.
+    """
+
+
+@dataclass
+class RingdownInterferometerResponseSet(ResponseSetBase, RingdownWaveformSet):
+    """Ringdown waveforms projected onto specific interferometers.
+
+    The ringdown counterpart of `InterferometerResponseSet`: the same
+    injection times, shifts and `inject` behaviour, over the parameters
+    `ml4gw.waveforms.adhoc.Ringdown` consumes instead of the CBC ones.
+    """
 
 
 def waveform_class_factory(ifos: list[str], base_cls, cls_name: str):

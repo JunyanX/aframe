@@ -5,7 +5,12 @@ from typing import TypeVar
 import igwn_segments
 import numpy as np
 
-from ledger.injections import InterferometerResponseSet, shift_mask
+from ledger.injections import (
+    InjectionMetadata,
+    InterferometerResponseSet,
+    RingdownInterferometerResponseSet,
+    shift_mask,
+)
 from ledger.ledger import Ledger, metadata, parameter
 
 SECONDS_PER_YEAR = 31556952  # 60 * 60 * 24 * 365.2425
@@ -208,24 +213,24 @@ class EventSet(Ledger):
         return result
 
 
-@dataclass
-class RecoveredInjectionSet(EventSet, InterferometerResponseSet):
-    """A set of injected signals recovered as detected events.
+class RecoveredInjectionMixin:
+    """Recovery behaviour shared by both waveform families.
 
-    Combines detected event information with injected waveform parameters,
-    storing data about detected events that matched injected signals.
+    `recover` and the metadata disambiguation depend only on
+    `injection_time`, `shift` and the event fields, so they are
+    independent of which parameter schema the subclass carries. This is
+    a plain mixin, not a dataclass: it must contribute no fields, or
+    it would shift every subclass's positional __init__ signature.
     """
 
     @classmethod
     def compare_metadata(cls, key, ours, theirs):
         if key == "num_injections":
-            return InterferometerResponseSet.compare_metadata(
-                key, ours, theirs
-            )
+            return InjectionMetadata.compare_metadata(key, ours, theirs)
         return super().compare_metadata(key, ours, theirs)
 
     @classmethod
-    def recover(cls, events: EventSet, injections: InterferometerResponseSet):
+    def recover(cls, events: EventSet, injections):
         """Match detected events to injected signals using injection time.
 
         For each injection, finds the event closest in time at the same
@@ -233,10 +238,10 @@ class RecoveredInjectionSet(EventSet, InterferometerResponseSet):
 
         Args:
             events: EventSet containing detected events.
-            injections: InterferometerResponseSet containing injected signals.
+            injections: response set containing the injected signals.
 
         Returns:
-            RecoveredInjectionSet with matched event and injection data.
+            A `cls` with matched event and injection data.
         """
         obj = cls()
         for shift in np.unique(events.shift, axis=0):
@@ -267,3 +272,32 @@ class RecoveredInjectionSet(EventSet, InterferometerResponseSet):
 
         obj.Tb = events.Tb
         return obj
+
+
+@dataclass
+class RecoveredInjectionSet(
+    RecoveredInjectionMixin, EventSet, InterferometerResponseSet
+):
+    """A set of injected signals recovered as detected events.
+
+    Combines detected event information with injected waveform
+    parameters, storing data about detected events that matched injected
+    signals.
+    """
+
+
+@dataclass
+class RingdownRecoveredInjectionSet(
+    RecoveredInjectionMixin, EventSet, RingdownInterferometerResponseSet
+):
+    """The ringdown counterpart of `RecoveredInjectionSet`.
+
+    Differs only in which parameter schema it carries.
+    """
+
+
+def get_recovered_cls(waveform_type):
+    """The recovered-injection class for a waveform family."""
+    if waveform_type == "ringdown":
+        return RingdownRecoveredInjectionSet
+    return RecoveredInjectionSet

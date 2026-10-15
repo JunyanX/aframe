@@ -382,6 +382,9 @@ class Ledger:
         with h5py.File(fname, "w") as target:
             target.attrs["length"] = length
 
+            # Trailing shapes that empty sources declare, e.g. ifo_snrs is
+            # (0, num_ifos), for the datasets created when no source has rows
+            empty_shapes = {}
             idx = 0
             for source in tqdm(_iter_open(files, "r", clean=clean)):
                 source_length = source.attrs["length"]
@@ -413,6 +416,14 @@ class Ledger:
                         if value is not None:
                             target.attrs[key] = value
                     elif source_length == 0:
+                        # keep the most dimensions seen: a default empty
+                        # ledger writes (0,) where an explicit one writes
+                        # (0, num_ifos)
+                        group_name = attr.metadata["kind"] + "s"
+                        if group_name in source and key in source[group_name]:
+                            trailing = source[group_name][key].shape[1:]
+                            if len(trailing) > len(empty_shapes.get(key, ())):
+                                empty_shapes[key] = trailing
                         continue
                     else:
                         # only chunk waveforms, not parameters
@@ -460,4 +471,5 @@ class Ledger:
                     continue
                 group = target.require_group(kind + "s")
                 if key not in group:
-                    group.create_dataset(key, shape=(0,), dtype=dtype)
+                    shape = (0, *empty_shapes.get(key, ()))
+                    group.create_dataset(key, shape=shape, dtype=dtype)
