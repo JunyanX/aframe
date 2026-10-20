@@ -81,6 +81,7 @@ def cbc_injections(tmp_path):
 
 def _sequence(background, injections, waveform_type):
     return Hdf5Sequence(
+        sequence_id=1,
         background_fname=str(background),
         injection_set_fname=str(injections),
         ifos=IFOS,
@@ -136,6 +137,7 @@ def test_cbc_campaign_still_works(background, cbc_injections):
 def test_defaults_to_cbc(background, cbc_injections):
     """Omitting waveform_type entirely must read as CBC."""
     seq = Hdf5Sequence(
+        sequence_id=1,
         background_fname=str(background),
         injection_set_fname=str(cbc_injections),
         ifos=IFOS,

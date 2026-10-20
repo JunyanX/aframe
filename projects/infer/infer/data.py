@@ -1,10 +1,8 @@
 import logging
-import math
 import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
-from zlib import adler32
 
 import h5py
 import numpy as np
@@ -15,6 +13,7 @@ from ledger.injections import (
     RingdownInterferometerResponseSet,
     waveform_class_factory,
 )
+from utils.streaming import StreamLayout
 
 FNAME_PATTERNS = {
     "prefix": "[a-zA-Z0-9_:-]+",
@@ -59,24 +58,24 @@ class BaseSequence(ABC):
 
     def __init__(
         self,
+        sequence_id: int,
         inference_sampling_rate: float,
         batch_size: int,
         rate: float | None = None,
         **kwargs,
     ):
-        self.inference_sampling_rate = inference_sampling_rate
         self.batch_size = batch_size
         self.rate = rate
+        self.id = sequence_id
 
         # Subclasses set sample_rate, size, t0, duration, and shifts.
         self._setup(**kwargs)
 
-        self.stride = int(self.sample_rate / inference_sampling_rate)
-        self.step_size = self.stride * batch_size
-
-        # a semi-unique sequence id from a hash of the descriptive metadata
-        fingerprint = f"{self.t0}{self.duration}{self.shifts}".encode()
-        self.id = adler32(fingerprint)
+        self.stream_layout = StreamLayout(
+            self.size - max(self.shifts),
+            batch_size,
+            int(self.sample_rate / inference_sampling_rate),
+        )
         self._initialize_sequence_state()
 
     @abstractmethod
@@ -113,38 +112,18 @@ class BaseSequence(ABC):
         return all(self._done.values())
 
     @property
-    def remainder(self):
-        # number of remaining data points not filling a full batch
-        return (self.size - max(self.shifts)) % self.step_size
-
-    @property
-    def num_pad(self):
-        # zeros needed to pad the last batch to a full batch
-        return (self.step_size - self.remainder) % self.step_size
-
-    @property
     def slice(self) -> slice:
-        # inference requests to slice off the end to drop the padded dummy data
-        num_slice = self.num_pad // self.stride
-        end = -num_slice if num_slice else None
-        return slice(end)
+        # drop the outputs computed from the final batch's padding
+        return slice(self.stream_layout.num_outputs)
 
     def __len__(self):
         # includes the trailing excess that can't fill a full batch; we pad it
         # with zeros and slice the corresponding outputs back off afterward
-        return math.ceil((self.size - max(self.shifts)) / self.step_size)
-
-    def _get_data_indices(self, batch_idx: int, shift: int = 0):
-        last = batch_idx == len(self) - 1
-        start = batch_idx * self.step_size + shift
-        end = start + self.step_size
-        # the last batch steps only by the remainder before padding
-        if last and self.remainder:
-            end = start + self.remainder
-        return start, end, last
+        return self.stream_layout.num_batches
 
     def _pad_last_batch(self, data: np.ndarray):
-        return np.pad(data, ((0, 0), (0, self.num_pad)), "constant")
+        padding = ((0, 0), (0, self.stream_layout.num_pad))
+        return np.pad(data, padding, "constant")
 
     def __call__(self, y, request_id, sequence_id):
         # insert the response at the right spot in the output array
@@ -172,6 +151,7 @@ class BaseSequence(ABC):
 class Hdf5Sequence(BaseSequence):
     def __init__(
         self,
+        sequence_id: int,
         background_fname: str,
         injection_set_fname: str | None,
         ifos: list[str],
@@ -190,6 +170,9 @@ class Hdf5Sequence(BaseSequence):
         events.
 
         Args:
+            sequence_id:
+                ID for the background stream, with the foreground using the
+                next one. Must be nonzero and unique.
             background_fname:
                 Path to the background segment
             injection_set_fname:
@@ -210,6 +193,7 @@ class Hdf5Sequence(BaseSequence):
         """
         logging.info("Initializing sequence")
         super().__init__(
+            sequence_id=sequence_id,
             inference_sampling_rate=inference_sampling_rate,
             batch_size=batch_size,
             rate=rate,
@@ -286,20 +270,19 @@ class Hdf5Sequence(BaseSequence):
 
         with h5py.File(self.background_fname, "r") as f:
             for i in range(len(self)):
-                x = []
-                for ifo, shift in zip(self.ifos, self.shifts, strict=True):
-                    start, end, last = self._get_data_indices(i, shift)
-                    x.append(f[ifo][start:end])
+                start, end, last = self.stream_layout.batch_bounds(i)
+                x = [
+                    f[ifo][start + shift : end + shift]
+                    for ifo, shift in zip(self.ifos, self.shifts, strict=True)
+                ]
                 x = np.stack(x).astype(np.float32)
                 x = self._pad_last_batch(x) if last else x
 
                 # inject waveforms into a copy of the background, if any
                 x_inj = None
-                offset = i * self.batch_size / self.inference_sampling_rate
                 if self.injection_set is not None:
-                    x_inj = self.injection_set.inject(
-                        x.copy(), self.t0 + offset
-                    )
+                    t0 = self.t0 + start / self.sample_rate
+                    x_inj = self.injection_set.inject(x.copy(), t0)
 
                 deadline = _throttle(deadline, interval)
                 yield x, x_inj
@@ -312,6 +295,7 @@ class Hdf5Sequence(BaseSequence):
 class RnPSequence(BaseSequence):
     def __init__(
         self,
+        sequence_id: int,
         injection_file: Path,
         channel: str,
         ifos: list[str],
@@ -329,6 +313,9 @@ class RnPSequence(BaseSequence):
         performance much.
 
         Args:
+            sequence_id:
+                ID for the background stream, with the foreground using the
+                next one. Must be nonzero and unique.
             injection_file:
                 R&P injection frame file to analyze
             channel:
@@ -346,6 +333,7 @@ class RnPSequence(BaseSequence):
         self.sample_rate = sample_rate
         # always in-process: no server to throttle, so rate is always None
         super().__init__(
+            sequence_id=sequence_id,
             inference_sampling_rate=inference_sampling_rate,
             batch_size=batch_size,
             rate=None,
@@ -392,7 +380,7 @@ class RnPSequence(BaseSequence):
 
     def __iter__(self):
         for i in range(len(self)):
-            start, end, last = self._get_data_indices(i)
+            start, end, last = self.stream_layout.batch_bounds(i)
             x_inj = self.timeseries[:, start:end]
             x_inj = self._pad_last_batch(x_inj) if last else x_inj
             # yield the same data as background and foreground
