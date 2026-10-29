@@ -310,12 +310,22 @@ class RingdownParameterSet(Ledger):
         Guarded for an empty ledger: `z_at_value` raises on a zero-sized
         input, but an empty rejection ledger is a supported pipeline state
         (`rejection_sample` writes one whenever a branch rejects nothing).
+
+        `z_at_value` solves each draw on its own, ~2.6 ms apiece, so a
+        sensitive volume over millions of draws took hours. Instead it
+        solves only the extremes, then interpolates the distance-redshift
+        relation on a grid log-spaced in redshift between them, which
+        matches the per-draw solve to ~1e-8 relative.
         """
         if self.distance.size == 0:
             return np.array([], dtype=np.float64)
-        return z_at_value(
-            DEFAULT_COSMOLOGY.luminosity_distance, self.distance * Mpc
+        bounds = [self.distance.min(), self.distance.max()] * Mpc
+        z_min, z_max = z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, bounds
         ).value
+        z_grid = np.geomspace(0.99 * z_min, 1.01 * z_max, 10_000)
+        d_grid = DEFAULT_COSMOLOGY.luminosity_distance(z_grid).to_value(Mpc)
+        return np.interp(self.distance, d_grid, z_grid)
 
     @property
     def remnant_mass_source(self):

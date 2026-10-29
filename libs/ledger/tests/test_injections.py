@@ -885,7 +885,60 @@ class TestRingdownRemnantProperties:
         expected = z_at_value(
             DEFAULT_COSMOLOGY.luminosity_distance, params.distance * Mpc
         ).value
-        np.testing.assert_allclose(params.redshift, expected, rtol=1e-12)
+        np.testing.assert_allclose(params.redshift, expected, rtol=1e-6)
+
+    def test_redshift_across_the_prior_range(self):
+        from astropy.cosmology import z_at_value
+        from astropy.units import Mpc
+        from ledger.injections import RingdownParameterSet
+        from utils.cosmology import DEFAULT_COSMOLOGY
+
+        # ringdown_prior draws distance from 100 Mpc to 20 Gpc
+        distance = np.concatenate(
+            [[100.0, 20000.0], np.random.default_rng(0).uniform(100, 2e4, 200)]
+        )
+        n = len(distance)
+        params = RingdownParameterSet(
+            frequency=np.full(n, 150.0),
+            quality=np.full(n, 10.0),
+            epsilon=np.full(n, 0.05),
+            phase=np.zeros(n),
+            inclination=np.zeros(n),
+            distance=distance,
+            ra=np.zeros(n),
+            dec=np.zeros(n),
+            psi=np.zeros(n),
+        )
+        expected = z_at_value(
+            DEFAULT_COSMOLOGY.luminosity_distance, distance * Mpc
+        ).value
+        np.testing.assert_allclose(params.redshift, expected, rtol=1e-6)
+
+    def test_redshift_scales_to_a_campaign(self):
+        """A sensitive volume reads `redshift` for millions of draws.
+
+        Solving each draw with `z_at_value` takes ~2.6 ms, which put a 10-yr
+        campaign's 2.2M draws at ~95 min, past the rule's time limit.
+        """
+        import time
+
+        from ledger.injections import RingdownParameterSet
+
+        n = 10_000
+        params = RingdownParameterSet(
+            frequency=np.full(n, 150.0),
+            quality=np.full(n, 10.0),
+            epsilon=np.full(n, 0.05),
+            phase=np.zeros(n),
+            inclination=np.zeros(n),
+            distance=np.random.default_rng(0).uniform(100, 2e4, n),
+            ra=np.zeros(n),
+            dec=np.zeros(n),
+            psi=np.zeros(n),
+        )
+        start = time.perf_counter()
+        _ = params.redshift
+        assert time.perf_counter() - start < 2
 
     def test_source_frame_is_detector_over_one_plus_z(self, params):
         np.testing.assert_allclose(
