@@ -94,8 +94,8 @@ def test_log_normal_remnant_mass_keys():
 
     prior, detector_frame_prior = log_normal_remnant_mass(80.0, sigma=0.1)
     assert set(prior) == {"remnant_mass_source"}
-    # Source-frame mass, so the detector-frame flag is False, matching
-    # log_normal_masses.
+    # Source-frame mass, so the detector-frame flag is False, as in
+    # end_o3_ratesandpops.
     assert detector_frame_prior is False
 
 

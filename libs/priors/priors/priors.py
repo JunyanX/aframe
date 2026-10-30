@@ -255,51 +255,6 @@ def gaussian_masses(
     return prior, detector_frame_prior
 
 
-def log_normal_masses(
-    m1: float,
-    m2: float,
-    sigma: float = 2,
-    cosmology: cosmo.Cosmology = DEFAULT_COSMOLOGY,
-):
-    """
-    Construct a log normal bilby prior for masses.
-
-    Masses are defined in the source frame.
-
-    Args:
-        m1:
-            Mean of the Log Normal distribution for mass 1
-        m2:
-            Mean of the Log Normal distribution for mass 2
-        sigma:
-            Standard deviation for m1 and m2
-        cosmology:
-            An `astropy` cosmology, used to determine redshift sampling
-
-    Returns:
-        prior:
-            `PriorDict` describing the binary black hole population
-        detector_frame_prior:
-            Boolean indicating which frame masses are defined in
-    """
-    prior = PriorDict(conversion_function=mass_constraints)
-
-    prior["mass_1"] = LogNormal(name="mass_1", mu=np.log(m1), sigma=sigma)
-    prior["mass_2"] = LogNormal(name="mass_2", mu=np.log(m2), sigma=sigma)
-    prior["mass_ratio"] = Constraint(0.02, 1)
-
-    prior["redshift"] = UniformSourceFrame(
-        name="redshift", minimum=0, maximum=2, cosmology=cosmology
-    )
-    prior["dec"] = Cosine(name="dec")
-    prior["ra"] = Uniform(
-        name="ra", minimum=0, maximum=2 * np.pi, boundary="periodic"
-    )
-
-    detector_frame_prior = False
-    return prior, detector_frame_prior
-
-
 def log_normal_remnant_mass(
     m: float,
     sigma: float = 0.1,
@@ -308,7 +263,8 @@ def log_normal_remnant_mass(
     """
     Construct a log normal target population in remnant mass.
 
-    The ringdown sibling of `log_normal_masses`. Used only to reweight a
+    The ringdown counterpart of the CBC log-normal mass target,
+    `plots.core.gwtc3.logprob_mass_lognorm`. Used only to reweight a
     ringdown injection campaign to a target population; it is never
     sampled from to generate waveforms.
 
@@ -321,7 +277,7 @@ def log_normal_remnant_mass(
             Standard deviation of log remnant mass. Dimensionless; not a
             width in solar masses.
         cosmology:
-            Accepted for signature symmetry with `log_normal_masses`. The
+            Accepted for signature symmetry with the other priors here. The
             target carries no redshift term: redshift enters the weight
             through the ratio in `plots.legacy.ringdown_stats`, and the
             volume bound comes from the source prior.
@@ -330,8 +286,8 @@ def log_normal_remnant_mass(
         prior:
             `PriorDict` with the single key `remnant_mass_source`.
         detector_frame_prior:
-            `False` — the key is a source-frame mass, matching
-            `log_normal_masses`.
+            `False` — the key is a source-frame mass, as in
+            `end_o3_ratesandpops`.
     """
     prior = PriorDict()
     prior["remnant_mass_source"] = LogNormal(
@@ -339,7 +295,7 @@ def log_normal_remnant_mass(
     )
     # False: the key is a SOURCE-frame mass. The repo convention is that
     # this flag says whether the prior's parameters are detector-frame, and
-    # `log_normal_masses` returns False for the same reason. No caller reads
+    # `end_o3_ratesandpops` returns False for the same reason. No caller reads
     # it today, which is exactly why it must not be set wrong here.
     return prior, False
 

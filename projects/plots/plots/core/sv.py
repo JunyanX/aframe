@@ -9,22 +9,28 @@ import numpy as np
 from bokeh import io
 from bokeh.layouts import gridplot
 from bokeh.models import ColumnDataSource
-from priors.priors import log_normal_masses
 from utils.cosmology import DEFAULT_COSMOLOGY, get_astrophysical_volume
 
 from plots.core import compute, style
 from plots.core.constants import DEFAULT_NUM_FAR_POINTS, SECONDS_PER_YEAR
 from plots.core.data import AnalysisData
+from plots.core.gwtc3 import log_dNdz, logprob_mass_lognorm
 
 if TYPE_CHECKING:
     from bilby.core.prior import PriorDict
 
 
 def get_prob(prior, ledger):
-    """Evaluate a source-frame mass prior on a ledger's injections."""
+    """Evaluate a prior's source-frame masses and redshift on injections.
+
+    Including redshift carries the `p_target(z) / p_source(z)` factor,
+    which is proportional to `1/(1+z)` for the default comoving-volume
+    source prior.
+    """
     sample = {
         "mass_1": ledger.mass_1_source,
         "mass_2": ledger.mass_2_source,
+        "redshift": ledger.redshift,
     }
     return prior.prob(sample, axis=0)
 
@@ -97,46 +103,79 @@ def _far_grid(background, max_far: float, num_far_points: int):
 
 def _weights(
     data: AnalysisData,
-    mass_combos: list[tuple],
+    mass_combos: list[tuple[float, float]],
     source_prior: "PriorDict",
-    dt: float | None,
     sigma: float,
-) -> np.ndarray:
-    """Importance weights reweighting injections to each target prior."""
-    logging.info("Computing data likelihood under source prior")
-    source_probs = get_prob(source_prior, data.foreground)
-    source_rejected_probs = get_prob(source_prior, data.rejected)
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Importance weights reweighting injections to each target population.
 
-    weights = np.zeros((len(mass_combos), len(source_probs)))
+    Args:
+        data:
+            AnalysisData object containing foreground and rejected ledgers,
+            as well as the live fraction after vetoes
+        mass_combos:
+            List of (m1, m2) central source frame masses
+        source_prior:
+            The instantiated prior that injections were drawn from
+        sigma:
+            Width of each log-normal distribution, in natural-log mass
+
+    Returns:
+        Weights for each foreground event, with shape `(C, N)` and one
+        row per mass combination, and the rejected draws' summed squared
+        weights, with shape `(C,)`. Both are normalized over the foreground
+        plus the live fraction of the rejected draws.
+    """
+    # The source density doesn't depend on the target so it can be
+    # evaluated up front
+    log_source = np.log(get_prob(source_prior, data.foreground))
+    log_source_rejected = np.log(get_prob(source_prior, data.rejected))
+
+    # Likewise, the redshift part of the target population is independent
+    # of the mass combo, so it can be evaluated outside the loop.
+    log_redshift = log_dNdz(data.foreground.redshift, DEFAULT_COSMOLOGY)
+    log_redshift_rejected = log_dNdz(data.rejected.redshift, DEFAULT_COSMOLOGY)
+
+    weights = np.zeros((len(mass_combos), len(log_source)))
+    rejected_w2 = np.zeros(len(mass_combos))
+    live = data.live_fraction
     for i, combo in enumerate(mass_combos):
         logging.info(f"Computing likelihoods under {combo} log normal")
-        prior, _ = log_normal_masses(
-            *combo, sigma=sigma, cosmology=DEFAULT_COSMOLOGY
+        params = {
+            "m1_mean": combo[0],
+            "m2_mean": combo[1],
+            "sig_lognorm_m1": sigma,
+            "sig_lognorm_m2": sigma,
+        }
+        weight = np.exp(
+            logprob_mass_lognorm(
+                data.foreground.mass_1_source,
+                data.foreground.mass_2_source,
+                params,
+            )
+            + log_redshift
+            - log_source
         )
-        weight = get_prob(prior, data.foreground) / source_probs
-        rejected_weights = (
-            get_prob(prior, data.rejected) / source_rejected_probs
+        rejected_weights = np.exp(
+            logprob_mass_lognorm(
+                data.rejected.mass_1_source,
+                data.rejected.mass_2_source,
+                params,
+            )
+            + log_redshift_rejected
+            - log_source_rejected
         )
 
-        norm = weight.sum() + rejected_weights.sum()
+        norm = weight.sum() + live * rejected_weights.sum()
         if norm > 0:
             weight /= norm
-
-        # enforce the recovery time delta by zeroing the weight of
-        # events recovered too far from their injection
-        if dt is not None:
-            logging.info(f"Enforcing recovery time delta of {dt} seconds")
-            mask = (
-                np.abs(
-                    data.foreground.detection_time
-                    - data.foreground.injection_time
-                )
-                <= dt
-            )
-            weight[~mask] = 0
+            rejected_weights /= norm
 
         weights[i] = weight
-    return weights
+        rejected_w2[i] = live * (rejected_weights**2).sum()
+
+    return weights, rejected_w2
 
 
 def _astrophysical_volume(source_prior: "PriorDict") -> float:
@@ -171,19 +210,32 @@ def compute_sensitive_volume(
         mass_combos: `(m1, m2)` pairs to compute curves for
         source_prior: the (already instantiated) prior the injections
             were drawn from
-        dt: if given, discard injections recovered more than `dt`
-            seconds from their injection time
+        dt: if given, count injections recovered more than `dt` seconds
+            from their injection time as misses
         max_far: largest false alarm rate to compute out to, per year
         num_far_points: number of points in the FAR grid
         sigma: width of the log normal mass distributions
     """
     v0 = _astrophysical_volume(source_prior)
     fars, thresholds = _far_grid(data.background, max_far, num_far_points)
-    weights = _weights(data, mass_combos, source_prior, dt, sigma)
+    weights, rejected_w2 = _weights(data, mass_combos, source_prior, sigma)
+
+    stats = data.foreground.detection_statistic
+    if dt is not None:
+        logging.info(f"Enforcing recovery time delta of {dt} seconds")
+        recovered = (
+            np.abs(
+                data.foreground.detection_time - data.foreground.injection_time
+            )
+            <= dt
+        )
+        # a recovery that far off is a miss, so it keeps its weight
+        # but can't clear any threshold
+        stats = np.where(recovered, stats, -np.inf)
 
     logging.info("Computing sensitive volume at thresholds")
     sv, err = compute.sensitive_volume(
-        data.foreground.detection_statistic, weights, thresholds
+        stats, weights, thresholds, missed_w2=rejected_w2
     )
     return SensitiveVolumeResult(
         mass_combos=mass_combos,
