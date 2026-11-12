@@ -56,26 +56,29 @@ def test_waveform_loader_defaults_to_cbc(
     bypass_waveform_sampler,
     waveform_type,
 ):
-    cbc_read = Mock(return_value=SimpleNamespace(right_pad=0.25))
+    # check_waveform_files reads the first waveform of each file
+    first = SimpleNamespace(right_pad=0.25, duration=1, sample_rate=8)
+    cbc_read = Mock(return_value=first)
     ringdown_read = Mock()
     monkeypatch.setattr(
         loader_module.WaveformPolarizationSet,
-        "read",
+        "read_idx",
         cbc_read,
     )
     monkeypatch.setattr(
         loader_module.RingdownWaveformPolarizationSet,
-        "read",
+        "read_idx",
         ringdown_read,
     )
     path = tmp_path / "training_waveforms.hdf5"
-    kwargs = {"training_waveform_path": path}
+    kwargs = {"training_waveform_files": [path]}
     if waveform_type is not None:
         kwargs["waveform_type"] = waveform_type
 
     WaveformLoader(**kwargs)
 
-    cbc_read.assert_called_once_with(path)
+    cbc_read.assert_called_once()
+    assert cbc_read.call_args.args[0] == path
     ringdown_read.assert_not_called()
 
 
@@ -84,7 +87,7 @@ def test_waveform_loader_reads_ringdown_file(
     bypass_waveform_sampler,
 ):
     loader = WaveformLoader(
-        training_waveform_path=ringdown_waveform_file,
+        training_waveform_files=[ringdown_waveform_file],
         waveform_type="ringdown",
     )
 
@@ -104,7 +107,7 @@ def test_waveform_loader_checks_ringdown_right_pad(
 
     with pytest.raises(ValueError, match="same right pad"):
         WaveformLoader(
-            training_waveform_path=ringdown_waveform_file,
+            training_waveform_files=[ringdown_waveform_file],
             waveform_type="ringdown",
         )
 
@@ -115,7 +118,7 @@ def test_waveform_loader_rejects_unknown_waveform_type(
 ):
     with pytest.raises(ValueError, match="cbc.*ringdown.*burst"):
         WaveformLoader(
-            training_waveform_path=tmp_path / "training_waveforms.hdf5",
+            training_waveform_files=[tmp_path / "training_waveforms.hdf5"],
             waveform_type="burst",
         )
 
@@ -149,11 +152,11 @@ def test_waveform_loader_forwards_waveform_type_to_sampler(
     the ringdown validation file would be read as a CBC one.
     """
     loader = WaveformLoader(
-        training_waveform_path=ringdown_waveform_file,
+        training_waveform_files=[ringdown_waveform_file],
         waveform_type="ringdown",
         ifos=ringdown_val_file.ifos,
         sample_rate=ringdown_val_file.sample_rate,
-        val_waveform_file=ringdown_val_file.path,
+        val_waveform_files=[ringdown_val_file.path],
     )
 
     assert loader.waveform_type == "ringdown"

@@ -8,7 +8,7 @@ def make_sampler(val_file, **kwargs):
     return WaveformSampler(
         ifos=val_file.ifos,
         sample_rate=val_file.sample_rate,
-        val_waveform_file=val_file.path,
+        val_waveform_files=[val_file.path],
         **kwargs,
     )
 
@@ -18,7 +18,7 @@ def test_sampler_defaults_to_cbc(cbc_val_file):
 
     assert sampler.waveform_type == "cbc"
     assert issubclass(sampler.waveform_set_cls, WaveformSet)
-    assert sampler.num_val_waveforms == cbc_val_file.size
+    assert sampler.val_waveform_size == cbc_val_file.waveform_size
     assert sampler.right_pad == cbc_val_file.right_pad
     assert sampler.get_val_waveforms(1, 0).shape == (
         cbc_val_file.size,
@@ -36,7 +36,7 @@ def test_sampler_reads_ringdown_validation_file(ringdown_val_file):
     assert not issubclass(cls, WaveformSet)
     assert "mass_1" not in cls.__dataclass_fields__
 
-    assert sampler.num_val_waveforms == ringdown_val_file.size
+    assert sampler.val_waveform_size == ringdown_val_file.waveform_size
     assert sampler.right_pad == ringdown_val_file.right_pad
 
     waveforms = sampler.get_val_waveforms(1, 0)

@@ -3,7 +3,7 @@
 import h5py
 import numpy as np
 import pytest
-from infer.data import Hdf5Sequence
+from infer.data import ShiftBatchSequence
 from ledger.events import (
     EventSet,
     RecoveredInjectionSet,
@@ -80,12 +80,12 @@ def cbc_injections(tmp_path):
 
 
 def _sequence(background, injections, waveform_type):
-    return Hdf5Sequence(
-        sequence_id=1,
+    """One shift of one background file, with its injection set."""
+    return ShiftBatchSequence(
         background_fname=str(background),
-        injection_set_fname=str(injections),
+        waveform_fnames=[str(injections)],
         ifos=IFOS,
-        shifts=[0, 0],
+        shifts=[[0, 0]],
         inference_sampling_rate=4,
         batch_size=8,
         waveform_type=waveform_type,
@@ -105,16 +105,17 @@ def _event_set(times):
 def test_reads_a_ringdown_campaign(background, ringdown_injections):
     seq = _sequence(background, ringdown_injections, "ringdown")
 
-    assert seq.injection_set is not None
-    assert len(seq.injection_set) == 3
+    injection_set = seq.injection_sets[0]
+    assert injection_set is not None
+    assert len(injection_set) == 3
     # the intrinsic parameters survived the read
-    assert np.all(seq.injection_set.frequency == np.array([1.0, 2.0, 3.0]))
-    assert not hasattr(seq.injection_set, "mass_1")
+    assert np.all(injection_set.frequency == np.array([1.0, 2.0, 3.0]))
+    assert not hasattr(injection_set, "mass_1")
 
 
 def test_recovers_ringdown_parameters(background, ringdown_injections):
     seq = _sequence(background, ringdown_injections, "ringdown")
-    recovered = seq.recover(_event_set([10.1, 20.1, 30.1]))
+    recovered = seq.recover(_event_set([10.1, 20.1, 30.1]), 0)
 
     assert isinstance(recovered, RingdownRecoveredInjectionSet)
     assert len(recovered) == 3
@@ -127,7 +128,7 @@ def test_recovers_ringdown_parameters(background, ringdown_injections):
 def test_cbc_campaign_still_works(background, cbc_injections):
     """Regression: the default path must behave exactly as before."""
     seq = _sequence(background, cbc_injections, "cbc")
-    recovered = seq.recover(_event_set([10.1, 20.1, 30.1]))
+    recovered = seq.recover(_event_set([10.1, 20.1, 30.1]), 0)
 
     assert isinstance(recovered, RecoveredInjectionSet)
     assert not isinstance(recovered, RingdownRecoveredInjectionSet)
@@ -136,17 +137,16 @@ def test_cbc_campaign_still_works(background, cbc_injections):
 
 def test_defaults_to_cbc(background, cbc_injections):
     """Omitting waveform_type entirely must read as CBC."""
-    seq = Hdf5Sequence(
-        sequence_id=1,
+    seq = ShiftBatchSequence(
         background_fname=str(background),
-        injection_set_fname=str(cbc_injections),
+        waveform_fnames=[str(cbc_injections)],
         ifos=IFOS,
-        shifts=[0, 0],
+        shifts=[[0, 0]],
         inference_sampling_rate=4,
         batch_size=8,
     )
     assert seq.waveform_type == "cbc"
-    assert np.all(seq.injection_set.mass_1 == np.array([1.0, 2.0, 3.0]))
+    assert np.all(seq.injection_sets[0].mass_1 == np.array([1.0, 2.0, 3.0]))
 
 
 def test_branch_with_no_injections_in_range(tmp_path, background):
@@ -161,7 +161,8 @@ def test_branch_with_no_injections_in_range(tmp_path, background):
         [10_000.0, 20_000.0],
     )
     seq = _sequence(background, injections, "ringdown")
-    assert seq.injection_set is None
+    assert seq.injection_sets == [None]
+    assert seq.injected_idx == []
 
 
 def test_reading_with_the_wrong_family_raises(background, ringdown_injections):
@@ -171,7 +172,7 @@ def test_reading_with_the_wrong_family_raises(background, ringdown_injections):
 
 
 def test_cli_passes_waveform_type_to_the_sequence(monkeypatch):
-    """`_run_branch` is the one place a Hdf5Sequence is built for a job."""
+    """`_sequence` is the one place a ShiftBatchSequence is built for a job."""
     from types import SimpleNamespace
 
     from infer import cli
@@ -185,7 +186,7 @@ def test_cli_passes_waveform_type_to_the_sequence(monkeypatch):
         recorded.update(kwargs)
         raise _Stop
 
-    monkeypatch.setattr(cli, "Hdf5Sequence", fake_sequence)
+    monkeypatch.setattr(cli, "ShiftBatchSequence", fake_sequence)
     cfg = SimpleNamespace(
         analysis_type="hdf5",
         ifos=IFOS,
@@ -195,7 +196,7 @@ def test_cli_passes_waveform_type_to_the_sequence(monkeypatch):
     )
     branch = {"fname": "bg.hdf5", "waveforms": "inj.hdf5", "shifts": [0, 1]}
     with pytest.raises(_Stop):
-        cli._run_branch(None, cfg, "0", branch, outdir=None)
+        cli._sequence(cfg, [("0", branch)])
 
     assert recorded["waveform_type"] == "ringdown"
 

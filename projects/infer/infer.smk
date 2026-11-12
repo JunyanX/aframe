@@ -3,22 +3,37 @@
 Two inference modes, selected by `inference_mode` in the run config.
 Both run branches in groups of at most `branches_per_job` via
 `infer-triton` / `infer-local`, and both write the same outputs.
-The `compute_branch_map` and `aggregate_infer` rules are shared.
+The `compute_branch_map` rule and the aggregate rules are shared.
+
+    inprocess (default): Each group job is one GPU job that loads the
+               model locally and runs several shifts of a file at once.
+               Best when there are many GPUs available and jobs can be
+               scheduled on them; e.g., Delta or OSG.
 
     triton: A Triton server on the submit node hosts the model, and each group
             job is a CPU client, also on the submit node, that streams its
             branches to it. Best when GPUs are scarce but multiple exist on
             the submit node. Realistically, only used on LDG.
 
-    inprocess: Each group job is one GPU job that loads the model locally.
-               Best when there are many GPUs available and jobs can be
-               scheduled on them; e.g., Delta or OSG.
+
+Each branch is tagged with the population of its testing waveforms
+and a group never mixes populations. The groups' outputs are merged by:
+
+    aggregate_background: the background, from every group.
+    aggregate_foreground: each population's foreground,
+                          foreground_<population>.hdf5, from only its
+                          groups. R&P frames carry their own injections,
+                          so for R&P it ignores the populations and writes
+                          a single foreground.hdf5 from every group.
+    aggregate_infer:      target rule for all of them.
+
 
 At very large branch counts the DAG construction can be batched:
-    snakemake --batch aggregate_infer=1/10
+    snakemake --batch aggregate_background=1/10
 """
 
 import json
+import math
 import os
 from pathlib import Path
 
@@ -42,10 +57,19 @@ if INFERENCE_BACKEND not in ("export", "compile", "aoti"):
 ANALYSIS_TYPE = config["analysis_type"]
 if ANALYSIS_TYPE not in ("hdf5", "rnp"):
     raise WorkflowError(f"analysis_type must be 'hdf5' or 'rnp', got {ANALYSIS_TYPE}")
-if ANALYSIS_TYPE == "rnp" and INFERENCE_MODE == "triton":
-    raise WorkflowError("analysis_type 'rnp' requires inference_mode 'inprocess'")
+
+SHIFTS_PER_BATCH = config["shifts_per_batch"]
 
 INFER_CONTAINER = container("infer")
+
+# The foreground aggregate_foreground writes: one per population, from the
+# testing waveforms injected into its timeslides, or for R&P, whose frames
+# carry their own injections, a single one that doesn't depend on the
+# populations.
+if ANALYSIS_TYPE == "rnp":
+    FOREGROUND = str(infer_dir / "foreground.hdf5")
+else:
+    FOREGROUND = str(infer_dir / "foreground_{population}.hdf5")
 
 TRITON_IMAGE = os.path.join(
     os.getenv("AFRAME_CONTAINER_ROOT", ""), config["triton_image"]
@@ -81,7 +105,8 @@ wildcard_constraints:
     group_id=r"\d+",
 
 
-# Outputs of each group job, merged across groups by aggregate_infer.
+# Outputs of each group job, merged across groups by aggregate_background
+# and aggregate_foreground.
 # metadata.json holds the row count of each event set.
 group_dir = infer_dir / "groups" / "{group_id}"
 _group_outputs = {
@@ -99,21 +124,22 @@ def _load_branch_map():
         return json.load(f)
 
 
-def _assign_groups(branch_map, split_at_file_changes):
+def _assign_groups(branch_map, branches_per_job):
     """Number the branches, in order, into groups of at most branches_per_job.
 
-    With `split_at_file_changes`, a group never spans two strain files, so
-    a file is transferred to a job once for all of its shifts in that group.
+    A group never spans two populations, so that its foreground
+    belongs to one. Background-only branches can join any group.
     """
-    group, size, last = -1, BRANCHES_PER_JOB, None
+    group, size, group_population = -1, branches_per_job, None
     for branch in branch_map.values():
-        if size == BRANCHES_PER_JOB or (
-            split_at_file_changes and branch["fname"] != last
+        population = branch["population"]
+        if size == branches_per_job or (
+            population and group_population not in (None, population)
         ):
-            group, size = group + 1, 0
+            group, size, group_population = group + 1, 0, None
         branch["group"] = group
+        group_population = group_population or population
         size += 1
-        last = branch["fname"]
 
 
 def _group_branches(group_id):
@@ -133,22 +159,54 @@ def get_infer_group_inputs(wildcards):
 
 def _infer_group_resources():
     """rule_resources for an inprocess infer_group job. The configured
-    runtime is per branch, so it's scaled to a group of branches_per_job.
+    runtime covers each job's fixed costs, and runtime_per_branch is added
+    for each of its branches_per_job branches.
     """
     res = rule_resources("infer_group", "infer")
     if "runtime" in res:
-        res["runtime"] *= BRANCHES_PER_JOB
-        res["allowed_execute_duration"] *= BRANCHES_PER_JOB
+        per_branch = config["resources"]["infer_group"]["runtime_per_branch"]
+        res["runtime"] += math.ceil(per_branch * BRANCHES_PER_JOB)  # Minutes
+        res["allowed_execute_duration"] = res["runtime"] * 60  # Seconds
     return res
 
 
-def get_infer_group_outputs(wildcards):
-    """Every group's outputs, keyed by output name."""
+def get_background_inputs(wildcards):
+    """Every group's outputs but its foreground, keyed by output name, for
+    aggregate_background.
+    """
     num_groups = 1 + max(b["group"] for b in _load_branch_map().values())
     return {
         name: expand(fname, group_id=range(num_groups))
         for name, fname in _group_outputs.items()
+        if name != "foreground"
     }
+
+
+def get_foreground_inputs(wildcards):
+    """The foregrounds and metadata of the groups that make up a foreground,
+    for aggregate_foreground: a population's groups, or for R&P every group.
+    """
+    branches = _load_branch_map().values()
+    if ANALYSIS_TYPE == "hdf5":
+        branches = [b for b in branches if b["population"] == wildcards.population]
+    groups = sorted({b["group"] for b in branches})
+    return {
+        name: expand(_group_outputs[name], group_id=groups)
+        for name in ("foreground", "metadata")
+    }
+
+
+def get_all_infer_group_inputs(wildcards) -> list[str]:
+    """Every file that any infer_group job reads for the infer_inputs target."""
+    branch_map = _load_branch_map()
+    inputs = sorted({b["fname"] for b in branch_map.values()})
+    if ANALYSIS_TYPE == "hdf5":
+        inputs += [
+            b["waveforms"] for b in branch_map.values() if b["waveforms"] is not None
+        ]
+    num_groups = 1 + max(b["group"] for b in branch_map.values())
+    inputs += expand(str(group_dir / "branches.json"), group_id=range(num_groups))
+    return inputs
 
 
 if ANALYSIS_TYPE == "rnp":
@@ -157,16 +215,22 @@ if ANALYSIS_TYPE == "rnp":
         """Enumerate R&P frame files as one branch each."""
         output:
             str(infer_dir / "branch_map.json"),
+        # Declared as params so that changing them reruns the checkpoint
+        params:
+            branches_per_job=BRANCHES_PER_JOB,
+            frame_dir=FRAME_DIR,
+            ifos=config["ifos"],
         run:
-            files = sorted(str(p) for p in Path(FRAME_DIR).rglob("*.gwf"))
+            frame_dir = params.frame_dir
+            files = sorted(str(p) for p in Path(frame_dir).rglob("*.gwf"))
             if not files:
-                raise WorkflowError(f"No .gwf frames found in {FRAME_DIR}")
-            shifts = [0.0] * len(config["ifos"])
+                raise WorkflowError(f"No .gwf frames found in {frame_dir}")
+            shifts = [0.0] * len(params.ifos)
             branch_map = {
-                str(i): {"fname": f, "shifts": shifts} for i, f in enumerate(files)
+                str(i): {"fname": f, "shifts": shifts, "population": None}
+                for i, f in enumerate(files)
             }
-            # one frame per branch, so there's nothing to share within a group
-            _assign_groups(branch_map, split_at_file_changes=False)
+            _assign_groups(branch_map, params.branches_per_job)
             Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
             with open(output[0], "w") as f:
                 json.dump(branch_map, f, indent=2)
@@ -179,9 +243,10 @@ else:
         The number of timeslides is the minimum needed to accumulate
         Tb seconds of background livetime. Branches that are too short to
         analyze after shifting and PSD burn-in are dropped. Optionally
-        includes zero-lag branches. Each branch records the waveform file of
-        the testing waveform branch with the same file and timeslide, which
-        holds all of its injections, or null if there is none (e.g. zero-lag).
+        includes zero-lag branches. Each branch records the population and
+        waveform file of the testing waveform branch with the same file and
+        timeslide, which holds all of its injections, or nulls if there is
+        none (e.g. zero-lag).
 
         Needs only the test segments, so it doesn't wait for fetching.
         """
@@ -189,6 +254,21 @@ else:
             str(bg_dir / "test" / "segments.txt"),
         output:
             str(infer_dir / "branch_map.json"),
+        # Declared as params so that changing them reruns the checkpoint.
+        # The last five are used by the data.smk helpers: _segment_chunks
+        # splits segments into files by max_duration, and
+        # testing_waveform_branches picks which branches get waveforms.
+        params:
+            branches_per_job=BRANCHES_PER_JOB,
+            Tb=config["Tb"],
+            shift_steps=config["shift_steps"],
+            psd_length=config["psd_length"],
+            zero_lag=zero_lag,
+            max_duration=config["max_duration"],
+            num_testing_signals=config["num_testing_signals"],
+            spacing=config["spacing"],
+            buffer=config["buffer"],
+            waveform_duration=config["waveform_duration"],
         run:
             def _get_num_timeslides(segments, Tb, shift_step, psd_length):
                 if Tb == 0:
@@ -203,27 +283,28 @@ else:
                             livetime += dur
                 return num_timeslides
 
-            psd_length = config["psd_length"]
+            psd_length = params.psd_length
             chunks = _segment_chunks(input[0])
             num_timeslides = _get_num_timeslides(
                 [(start, start + duration) for start, duration in chunks],
-                config["Tb"],
-                max(config["shift_steps"]),
+                params.Tb,
+                max(params.shift_steps),
                 psd_length,
             )
-            waveform_branches = set(testing_waveform_branches())
+            # (start, duration, timeslide) -> population
+            waveform_branches = {b[:3]: b[3] for b in testing_waveform_branches()}
             num_waveform_timeslides = max(
                 (t for _, _, t in waveform_branches), default=0
             )
             if num_waveform_timeslides > num_timeslides:
                 raise WorkflowError(
                     f"num_testing_signals requires {num_waveform_timeslides} "
-                    f"timeslides but Tb={config['Tb']} only covers "
+                    f"timeslides but Tb={params.Tb} only covers "
                     f"{num_timeslides}. "
                     f"Reduce num_testing_signals or increase Tb."
                 )
             # zero lag is timeslide 0, which has no testing waveforms
-            timeslides = range(0 if zero_lag else 1, num_timeslides + 1)
+            timeslides = range(0 if params.zero_lag else 1, num_timeslides + 1)
             branch_map, i = {}, 0
             for start, duration in chunks:
                 for timeslide in timeslides:
@@ -233,19 +314,21 @@ else:
                     ):
                         continue
                     branch = (start, duration, timeslide)
+                    population = waveform_branches.get(branch)
                     branch_map[str(i)] = {
                         "fname": str(
                             test_bg / f"background-{start}-{duration}.hdf5"
                         ),
                         "shifts": shifts,
+                        "population": population,
                         "waveforms": (
-                            testing_waveform_file(*branch)
-                            if branch in waveform_branches
+                            testing_waveform_file(*branch, population)
+                            if population
                             else None
                         ),
                     }
                     i += 1
-            _assign_groups(branch_map, split_at_file_changes=True)
+            _assign_groups(branch_map, params.branches_per_job)
             Path(output[0]).parent.mkdir(parents=True, exist_ok=True)
             with open(output[0], "w") as f:
                 json.dump(branch_map, f, indent=2)
@@ -286,6 +369,7 @@ indices match infer_group's inputs.
 _group_common_params = dict(
     analysis_type=ANALYSIS_TYPE,
     ifos="[" + ",".join(config["ifos"]) + "]",
+    sample_rate=config["sample_rate"],
     inference_sampling_rate=config["inference_sampling_rate"],
     batch_size=config["inference_batch_size"],
     psd_length=config["psd_length"],
@@ -306,6 +390,8 @@ _GROUP_SHELL_SUFFIX = (
     + (" --zero_lag_out {output.zero_lag}" if zero_lag else "")
     + (" --timeseries_out {output.timeseries}" if return_timeseries else "")
     + " '--ifos={params.ifos}'"
+    + (f" --channel {CHANNEL}" if ANALYSIS_TYPE == "rnp" else "")
+    + " --sample_rate {params.sample_rate}"
     " --inference_sampling_rate {params.inference_sampling_rate}"
     " --batch_size {params.batch_size}"
     " --psd_length {params.psd_length}"
@@ -418,13 +504,8 @@ else:
             resources:
                 **rule_resources("compile_model", "infer"),
                 **gpu_resources(),
-            params:
-                num_ifos=len(config["ifos"]),
-                sample_rate=config["sample_rate"],
-                kernel_length=config["kernel_length"],
-                batch_size=config["inference_batch_size"],
             script:
-                "../export/scripts/compile_aoti.py"
+                "scripts/compile_aoti.py"
 
     else:
         _artifact = str(train_out / "model_exported.pt2")
@@ -450,27 +531,35 @@ else:
         params:
             **_group_common_params,
             backend=INFERENCE_BACKEND,
-            sample_rate=config["sample_rate"],
             kernel_length=config["kernel_length"],
             highpass=config["highpass"],
             fftlength=config["fftlength"] or "null",
+            augmentor=json.dumps(config.get("augmentor")),
+            shifts_per_batch=SHIFTS_PER_BATCH,
         shell:
             "infer-local"
             " --weights {input.artifact}"
             " --backend {params.backend}"
+            " --shifts_per_batch {params.shifts_per_batch}"
             + (" --aoti_path {input.artifact}" if INFERENCE_BACKEND == "aoti" else "")
-            + " --sample_rate {params.sample_rate}"
-            " --kernel_length {params.kernel_length}"
+            + " --kernel_length {params.kernel_length}"
             " --highpass {params.highpass}"
             " --fftlength {params.fftlength}"
-            + (f" --channel {CHANNEL}" if ANALYSIS_TYPE == "rnp" else "")
-            + _GROUP_SHELL_SUFFIX
+            " '--augmentor={params.augmentor}'" + _GROUP_SHELL_SUFFIX
 
 
-rule aggregate_infer:
-    """Merge per-group outputs into the final background and foreground."""
+rule infer_inputs:
+    """Make every file that inference reads without running inference"""
     input:
-        unpack(get_infer_group_outputs),
+        get_all_infer_group_inputs,
+
+
+rule aggregate_background:
+    """Merge every group's background into the final background, and its
+    zero lag and timeseries when they're requested.
+    """
+    input:
+        unpack(get_background_inputs),
     output:
         **({"zero_lag": str(infer_dir / "0lag.hdf5")} if zero_lag else {}),
         **(
@@ -479,16 +568,59 @@ rule aggregate_infer:
             else {}
         ),
         background=str(infer_dir / "background.hdf5"),
-        foreground=str(infer_dir / "foreground.hdf5"),
     log:
-        str(infer_log_dir / "aggregate_infer.log"),
+        str(infer_log_dir / "aggregate_background.log"),
     localrule: config["aggregate_rules_local"]
     container:
         INFER_CONTAINER
     resources:
-        **rule_resources("aggregate_infer", "infer"),
+        **rule_resources("aggregate_background", "infer"),
+    script:
+        "scripts/aggregate_background.py"
+
+
+rule aggregate_foreground:
+    """Merge a population's per-group foregrounds into its foreground,
+    foreground_{population}.hdf5, or for R&P every group's into foreground.hdf5.
+    """
+    input:
+        unpack(get_foreground_inputs),
+    output:
+        foreground=FOREGROUND,
+    log:
+        str(
+            infer_log_dir
+            / (
+                "aggregate_foreground.log"
+                if ANALYSIS_TYPE == "rnp"
+                else "aggregate_foreground-{population}.log"
+            )
+        ),
+    localrule: config["aggregate_rules_local"]
+    container:
+        INFER_CONTAINER
+    resources:
+        **rule_resources("aggregate_foreground", "infer"),
     params:
         analysis_type=ANALYSIS_TYPE,
         waveform_type=WAVEFORM_TYPE,
     script:
-        "scripts/aggregate_infer.py"
+        "scripts/aggregate_foreground.py"
+
+
+rule aggregate_infer:
+    """Target rule: every inference output, the background and every active
+    population's foreground, or for R&P its single foreground.
+
+    Runs no command. aggregate_foreground has a {population} wildcard, so it
+    can't be run by name; this asks for all of its outputs, and
+    aggregate_background's, instead.
+    """
+    input:
+        rules.aggregate_background.output,
+        (
+            expand(rules.aggregate_foreground.output, population=POPULATIONS)
+            if ANALYSIS_TYPE == "hdf5"
+            else rules.aggregate_foreground.output
+        ),
+    localrule: True

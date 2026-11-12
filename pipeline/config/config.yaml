@@ -53,7 +53,7 @@ max_duration: 20000.0       # maximum chunk length when splitting segments (seco
 sample_rate: 2048.0         # Hz
 
 # --- Waveform generation -----------------------------------------------------
-prior: &prior priors.priors.end_o3_ratesandpops  # module path to a prior
+prior: priors.priors.end_o3_ratesandpops  # module path to a prior
 minimum_frequency: 20.0                          # Hz
 reference_frequency: 50.0                        # Hz
 waveform_duration: 8.0                           # seconds
@@ -64,6 +64,7 @@ seed: 1122
 # Waveform family: cbc or ringdown. Selects the generator and the ledger
 # classes every stage writes and reads. `aframe-init snakemake --preset
 # ringdown` sets it along with the parameters a ringdown run needs.
+# Shared by every population, since training has one waveform_sampler.
 waveform_type: cbc
 
 # --- Training waveforms ------------------------------------------------------
@@ -83,6 +84,7 @@ shift_steps:
   - 0.0  # seconds to shift H1 each time shift
   - 1.0  # seconds to shift L1 each time shift
 
+jitter: 0.1             # seconds to jitter each injection's time
 spacing: 16.0           # spacing between testing injections (seconds)
 buffer: 16.0            # edge buffer around each segment (seconds)
 highpass: 32.0          # Hz
@@ -93,7 +95,32 @@ max_num_samples: 3000   # max waveforms generated per rejection-sampling batch
 # Number of condor jobs that validation waveforms are split across
 num_validation_jobs: 200
 
-# --- Training ----------------------------------------------------------------
+# --- Populations -------------------------------------------------------------
+# The waveform settings above (prior through num_validation_jobs, except
+# waveform_type and pregenerate_training_waveforms), and mass_combos,
+# remnant_mass_combos and remnant_mass_sigma under Plots, are the defaults
+# of every population. A population lists only the ones it changes, e.g.
+
+#   populations:
+#     bbh: {}
+#     bns:
+#       prior: priors.priors.end_o3_ratesandpops_bns
+#       waveform_duration: 25.0
+#       num_testing_signals: 50000
+#       mass_combos: 
+#         - [1.4, 1.4]
+#   active_populations: [bbh, bns]
+
+# Each active population gets its own waveforms, inference foreground and
+# sensitive volume, against a shared background. right_pad, seed, jitter,
+# highpass, lowpass, sample_rate, waveform_type and
+# pregenerate_training_waveforms are shared by every population.
+
+populations:
+  bbh: {}
+active_populations: [bbh]
+
+# --- Training -----------------------------------------------------------------
 # Lightning CLI YAML config for `train fit`.
 # Relative to the repo if not absolute.
 train_config: projects/train/train.yaml
@@ -116,9 +143,10 @@ analysis_type: hdf5
 # rnp_channel: <channel>               # channel within the frames
 
 # Inference mode:
-#   - triton: Triton server on GPU + streaming CPU clients
 #   - inprocess: self-contained GPU jobs, model loaded locally per job
-inference_mode: triton
+#   - triton: Triton server on GPU + streaming CPU clients.
+#             Streams one shift at a time, ignoring shifts_per_batch
+inference_mode: inprocess
 
 # Model backend for in-process inference::
 #   - export: model_exported.pt2 run as a GraphModule. Portable across GPU archs.
@@ -129,8 +157,16 @@ inference_mode: triton
 #              on clusters with heterogeneous GPU pools like OSG.
 inference_backend: export
 
-# Maximum number of (file, shift) branches each job processes.
-branches_per_job: 1
+# Maximum number of (file, shift) branches each job processes, so the
+# number of jobs is about the number of branches divided by this.
+# 200 is good for a Tb of about a year. Raise it for larger Tb, e.g.,
+# to 1000 for 100 years, so that each job's fixed costs stay small 
+# relative to the inference time.
+branches_per_job: 200
+
+# Number of a job's shifts of one file run through the model together.
+# In-process inference only. Each batch is cut short by its largest shift.
+shifts_per_batch: 16
 
 # Whitening / windowing
 psd_length: 64.0                 # seconds of PSD data
@@ -174,7 +210,6 @@ mass_combos:
   - [20, 20]
   - [20, 10]
 
-source_prior: *prior
 dt: null  # recovery time delta in seconds (null to disable)
 # Ringdown runs only: median source-frame remnant masses (Msun) of the
 # log normal targets, one panel each, and the standard deviation of log
@@ -226,9 +261,11 @@ resources:
   train: {mem_mb: 32000, runtime: 2880}
   export: {mem_mb: 32000, runtime: 10}
   compile_model: {mem_mb: 32000, runtime: 10}
-  # runtime per branch, scaled by branches_per_job
-  infer_group: {mem_mb: 8192, runtime: 20}
-  aggregate_infer: {mem_mb: 4096, runtime: 15}
+  # runtime for each job's fixed costs, plus runtime_per_branch for each
+  # of its branches_per_job branches
+  infer_group: {mem_mb: 8192, runtime: 10, runtime_per_branch: 0.5}
+  aggregate_background: {mem_mb: 4096, runtime: 15}
+  aggregate_foreground: {mem_mb: 4096, runtime: 15}
   sensitive_volume: {mem_mb: 16384, runtime: 15}
 
 # --- GPUs --------------------------------------------------------------------
