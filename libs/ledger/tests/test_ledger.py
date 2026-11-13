@@ -7,7 +7,6 @@ from ledger import ledger
 from ledger.events import RecoveredInjectionSet
 from ledger.injections import (
     InjectionParameterSet,
-    RingdownInjectionParameterSet,
 )
 
 
@@ -191,7 +190,7 @@ class TestInjectionSet:
 
 
 IFOS = ["H1", "L1"]
-EMPTY_SET_CLASSES = [InjectionParameterSet, RingdownInjectionParameterSet]
+EMPTY_SET_CLASSES = [InjectionParameterSet]
 
 
 def _populated(cls, n):

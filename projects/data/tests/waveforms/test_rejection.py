@@ -48,7 +48,7 @@ def test_ringdown_rejection_sample_returns_projected_strain(psd):
     np.random.seed(0)
     torch.manual_seed(0)
 
-    parameters, _ = sample_ringdown(psd)
+    parameters, rejected = sample_ringdown(psd)
 
     waveform_size = int(SAMPLE_RATE * WAVEFORM_DURATION)
     # validation waveforms are stored per interferometer, already projected
@@ -67,13 +67,6 @@ def test_ringdown_rejection_sample_returns_projected_strain(psd):
     assert parameters["right_pad"] == RIGHT_PAD
     assert parameters["ifos"] == IFOS
     assert parameters["num_injections"] >= NUM_SIGNALS
-
-
-def test_ringdown_rejection_sample_records_ringdown_parameters(psd):
-    np.random.seed(1)
-    torch.manual_seed(1)
-
-    parameters, rejected = sample_ringdown(psd)
 
     # accepted parameters are the ones the ringdown prior drew
     for name in ("frequency", "quality", "epsilon", "inclination"):

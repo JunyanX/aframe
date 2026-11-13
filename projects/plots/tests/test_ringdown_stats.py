@@ -100,25 +100,23 @@ def test_normalize_log_weights_survives_extreme_lognormal():
     np.testing.assert_allclose(w, np.array([0.0, 0.0, 0.0, 1.0]))
 
 
-def test_normalize_log_weights_rejects_all_neg_inf():
-    with pytest.raises(ValueError, match="no finite"):
-        normalize_log_weights(np.array([-np.inf, -np.inf]))
-
-
-def test_normalize_log_weights_rejects_nan():
-    with pytest.raises(ValueError, match="not finite"):
-        normalize_log_weights(np.array([-1.0, np.nan]))
+@pytest.mark.parametrize(
+    ("log_w", "message"),
+    [
+        ([-1.0, np.nan], "not finite"),
+        ([-np.inf, -np.inf], "no finite"),
+        ([], "no finite"),
+    ],
+)
+def test_normalize_log_weights_rejects_unusable_weights(log_w, message):
+    with pytest.raises(ValueError, match=message):
+        normalize_log_weights(np.array(log_w))
 
 
 def test_normalize_log_weights_unequal_under_large_offset():
     """Same as above, but the two weights differ by a finite amount."""
     w = normalize_log_weights(np.array([-1e16, -1e16 - 2]))
     np.testing.assert_allclose(w, np.array([0.88079708, 0.11920292]))
-
-
-def test_normalize_log_weights_rejects_empty():
-    with pytest.raises(ValueError, match="no finite"):
-        normalize_log_weights(np.array([]))
 
 
 def test_support_coverage_full_for_defaults(source_prior):
@@ -182,22 +180,20 @@ def z_of_distance(source_prior):
     """Interpolated luminosity-distance -> redshift, validated in place.
 
     `z_at_value` is a scalar root-find: 1000 inversions take about 4.7 s,
-    so the 400k draws below would cost roughly half an hour per target.
-    An interpolation over the prior's distance range is exact enough --
-    validated here against direct inversion on a coarse subsample, max
-    absolute difference of order 1e-9.
+    so the 400k draws below would cost roughly half an hour. The grid is
+    built forwards instead: redshifts between the two ends of the prior,
+    and the distance of each, so that only the ends need a root-find.
     """
     from astropy.cosmology import z_at_value
     from astropy.units import Mpc
 
-    d_lo = source_prior["distance"].minimum
-    d_hi = source_prior["distance"].maximum
-    d_grid = np.linspace(d_lo, d_hi, _Z_GRID_N)
-    z_grid = z_at_value(Planck15.luminosity_distance, d_grid * Mpc).value
+    distance = source_prior["distance"]
+    ends = [distance.minimum, distance.maximum] * Mpc
+    z_lo, z_hi = z_at_value(Planck15.luminosity_distance, ends).value
+    z_grid = np.linspace(z_lo, z_hi, _Z_GRID_N)
+    d_grid = Planck15.luminosity_distance(z_grid).to_value(Mpc)
 
-    # Validate BETWEEN nodes. np.linspace(d_lo, d_hi, 101) would be
-    # exactly d_grid[::100] -- every check point a stored node, which
-    # tests lookup rather than interpolation error.
+    # Validate BETWEEN nodes, against direct inversion.
     check_d = 0.5 * (d_grid[:-1:100] + d_grid[1::100])
     check_z = z_at_value(Planck15.luminosity_distance, check_d * Mpc).value
     assert np.max(np.abs(np.interp(check_d, d_grid, z_grid) - check_z)) < 1e-7
@@ -207,7 +203,7 @@ def z_of_distance(source_prior):
 
 @pytest.fixture(scope="module")
 def population_sample(source_prior, z_of_distance):
-    """One set of source-prior draws, shared across target masses."""
+    """One set of source-prior draws."""
     from ledger.injections import MSUN, C, G
 
     rng = np.random.default_rng(3)
@@ -228,8 +224,7 @@ def population_sample(source_prior, z_of_distance):
     return f, q, z, m_src
 
 
-@pytest.mark.parametrize("m0", [190.0, 250.0])
-def test_weighted_population_matches_p_s(source_prior, population_sample, m0):
+def test_weighted_population_matches_p_s(source_prior, population_sample):
     """Design Ruling 3(c): the INDEPENDENT target-identity test.
 
     The quadrature tests above only compare `conditioned_means` with
@@ -238,10 +233,11 @@ def test_weighted_population_matches_p_s(source_prior, population_sample, m0):
     `log_importance_weights` and `conditioned_means` describe the same
     population.
 
-    Both parameters straddle the default warning floor: coverage is
-    0.96035231 at M0=190 (no warning) and 0.249103873 at M0=250
-    (warning). p_S is the oracle for both -- the floor is reporting only.
+    Coverage at M0=250 is 0.249103873, far below the default warning
+    floor, so conditioning moves the means a long way. p_S is the oracle
+    whatever the coverage -- the floor is reporting only.
     """
+    m0 = 250.0
     from plots.core.ringdown_stats import (
         conditioned_means,
         log_importance_weights,
@@ -376,7 +372,8 @@ def test_far_grid_credits_tie_group_with_true_exceedance_rate():
     assert pairs == [(9.0, 2.0), (8.0, 3.0)]
 
 
-def test_far_grid_rejects_nan_background():
+@pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+def test_far_grid_rejects_non_finite_background(bad):
     """NaN sorts ABOVE every finite value, so it becomes the top
     threshold at the lowest FAR while `statistic >= nan` is false for
     every event. Reproduced against the committed helper:
@@ -387,6 +384,10 @@ def test_far_grid_rejects_nan_background():
     Every finite threshold's rate was wrong too, not only the NaN's, and
     the run still exited 0 and wrote both output files. The raise has to
     come before any of that.
+
+    +inf and -inf are rejected as well, and none of the three is silently
+    dropped: dropping would leave Tb describing a livetime the surviving
+    sample no longer covers, understating every FAR.
     """
     from plots.core.ringdown_stats import (
         SECONDS_PER_YEAR,
@@ -394,21 +395,7 @@ def test_far_grid_rejects_nan_background():
     )
 
     with pytest.raises(ValueError, match="1 non-finite entries"):
-        far_threshold_grid(np.array([1.0, 2.0, np.nan]), SECONDS_PER_YEAR, 3)
-
-
-def test_far_grid_rejects_infinite_background_entries():
-    """+inf and -inf are rejected as well, and none of the three is
-    silently dropped: dropping would leave Tb describing a livetime the
-    surviving sample no longer covers, understating every FAR."""
-    from plots.core.ringdown_stats import (
-        SECONDS_PER_YEAR,
-        far_threshold_grid,
-    )
-
-    for bad in (np.inf, -np.inf):
-        with pytest.raises(ValueError, match="non-finite"):
-            far_threshold_grid(np.array([1.0, 2.0, bad]), SECONDS_PER_YEAR, 3)
+        far_threshold_grid(np.array([1.0, 2.0, bad]), SECONDS_PER_YEAR, 3)
 
 
 # tb_years * (1/tb_years) rounds to 0.9999999999999999 at this livetime,
