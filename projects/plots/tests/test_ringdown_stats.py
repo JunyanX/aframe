@@ -579,16 +579,14 @@ def test_far_grid_accepts_caps_that_overflow_a_naive_bound():
     np.testing.assert_array_equal(thresholds, np.array([9.0]))
 
 
-def test_far_grid_nan_cap_keeps_the_committed_message():
-    """The full-background branch is written as `not (... > ...)` so a
-    NaN cap lands in it. Deleting that branch makes this die in
-    `int(nan)` instead of raising the documented message."""
+@pytest.mark.parametrize("max_far", [np.nan, 0.0, -1.0])
+def test_far_grid_rejects_a_cap_that_is_not_positive(max_far):
     from plots.core.ringdown_stats import (
         SECONDS_PER_YEAR,
         far_threshold_grid,
     )
 
-    with pytest.raises(ValueError, match="no background rank"):
+    with pytest.raises(ValueError, match="max_far must be positive"):
         far_threshold_grid(
-            np.arange(100, dtype=float), SECONDS_PER_YEAR, np.nan
+            np.arange(100, dtype=float), SECONDS_PER_YEAR, max_far
         )
