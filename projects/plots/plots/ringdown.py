@@ -217,7 +217,8 @@ def main(
         f.create_dataset("thresholds", data=thresholds)
         f.create_dataset("fars", data=fars)
         for i, m0 in enumerate(remnant_mass_combos):
-            g = f.create_group(str(m0))
+            # the same name whether the target came as 40 or 40.0
+            g = f.create_group(str(float(m0)))
             g.create_dataset("sv", data=sv[i])
             g.create_dataset("err", data=sv_err[i])
             g.attrs["remnant_mass_median"] = m0
@@ -232,7 +233,7 @@ def main(
             r"$$M_f={}\,M_\odot\text{{ (source), }}\sigma_{{\ln M}}="
             + str(sigma)
             + r"$$"
-        ).format(c),
+        ).format(f"{c:g}"),
     )
     for i, p in enumerate(figures):
         color = style.palette[0]

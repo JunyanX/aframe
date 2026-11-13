@@ -168,7 +168,9 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
         assert "dV_c/(1+z)" in f.attrs["redshift_measure"]
         assert "ALL draws" in f.attrs["uncertainty_method"]
         groups = [k for k in f if k not in ("fars", "thresholds")]
-        assert sorted(groups) == ["120", "150", "40", "80"]
+        # named as the pipeline names them, where the CLI parses the
+        # targets as floats
+        assert sorted(groups) == ["120.0", "150.0", "40.0", "80.0"]
         n = f["fars"].shape[0]
         assert n > 0 and f["thresholds"].shape[0] == n
         for key in groups:
@@ -333,5 +335,11 @@ def test_cli_writes_both_outputs(campaign, tmp_path):
             "null",
         ]
     )
-    assert (out / "sensitive_volume.hdf5").exists()
-    assert (out / "sensitive_volume.html").exists()
+    import h5py
+
+    with h5py.File(out / "sensitive_volume.hdf5") as f:
+        groups = sorted(k for k in f if k not in ("fars", "thresholds"))
+    assert groups == ["120.0", "150.0", "40.0", "80.0"]
+    html = (out / "sensitive_volume.html").read_text()
+    assert "M_f=40" in html
+    assert "M_f=40.0" not in html
