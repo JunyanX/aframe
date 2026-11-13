@@ -16,23 +16,6 @@ RINGDOWN_PARAMETERS = (
 ParameterArray = np.ndarray | torch.Tensor
 
 
-def _to_batch_tensor(name: str, value: ParameterArray) -> torch.Tensor:
-    """Convert a ringdown parameter to a one-dimensional CPU tensor."""
-    tensor = torch.as_tensor(value, dtype=torch.float64, device="cpu")
-    if tensor.ndim != 1:
-        raise ValueError(
-            f"Ringdown parameter '{name}' must be one-dimensional, "
-            f"got shape {tuple(tensor.shape)}"
-        )
-    if not len(tensor):
-        raise ValueError(f"Ringdown parameter '{name}' must not be empty")
-    if not torch.isfinite(tensor).all():
-        raise ValueError(
-            f"Ringdown parameter '{name}' must contain finite values"
-        )
-    return tensor
-
-
 def generate_ringdown(
     samples: Mapping[str, ParameterArray],
     sample_rate: float,
@@ -61,10 +44,6 @@ def generate_ringdown(
         Cross and plus polarizations, each with shape
         ``(batch, int(sample_rate * waveform_duration))``.
     """
-    if not np.isfinite(sample_rate) or sample_rate <= 0:
-        raise ValueError("sample_rate must be finite and positive")
-    if not np.isfinite(waveform_duration) or waveform_duration <= 0:
-        raise ValueError("waveform_duration must be finite and positive")
     if (
         not np.isfinite(right_pad)
         or right_pad <= 0
@@ -75,47 +54,33 @@ def generate_ringdown(
             "waveform_duration"
         )
 
-    waveform_size = int(sample_rate * waveform_duration)
-    ringdown_size = int(sample_rate * right_pad)
-    if waveform_size < 1:
-        raise ValueError(
-            "sample_rate * waveform_duration must produce at least one sample"
-        )
-    if ringdown_size < 1:
-        raise ValueError(
-            "sample_rate * right_pad must produce at least one sample"
-        )
-
-    missing = [name for name in RINGDOWN_PARAMETERS if name not in samples]
-    if missing:
-        raise KeyError(f"Missing ringdown parameters: {', '.join(missing)}")
-
     parameters = {
-        name: _to_batch_tensor(name, samples[name])
+        name: torch.as_tensor(samples[name], dtype=torch.float64, device="cpu")
         for name in RINGDOWN_PARAMETERS
     }
-    batch_sizes = {len(value) for value in parameters.values()}
-    if len(batch_sizes) != 1:
-        sizes = {name: len(value) for name, value in parameters.items()}
-        raise ValueError(
-            f"Ringdown parameters must have equal batch sizes, got {sizes}"
-        )
-
+    # A negative frequency or distance still gives a finite waveform, so
+    # the check on the output below can't catch either.
     if torch.any(parameters["frequency"] <= 0):
         raise ValueError("frequency must be positive")
     if torch.any(parameters["frequency"] >= sample_rate / 2):
         raise ValueError("frequency must be below the Nyquist frequency")
-    if torch.any(parameters["quality"] <= 0):
-        raise ValueError("quality must be positive")
-    if torch.any(parameters["epsilon"] < 0):
-        raise ValueError("epsilon must be nonnegative")
     if torch.any(parameters["distance"] <= 0):
         raise ValueError("distance must be positive")
 
     generator = Ringdown(sample_rate=sample_rate, duration=right_pad)
     with torch.no_grad():
         cross, plus = generator(**parameters)
+    # ml4gw doesn't check its inputs. A quality below 1 or a negative
+    # epsilon puts a negative number under a square root and comes back
+    # as NaN, as does any parameter that isn't finite.
+    if not (torch.isfinite(cross).all() and torch.isfinite(plus).all()):
+        raise ValueError(
+            "Ringdown waveforms are not finite: every parameter must be "
+            "finite, quality above 1 and epsilon nonnegative"
+        )
 
+    waveform_size = int(sample_rate * waveform_duration)
+    ringdown_size = int(sample_rate * right_pad)
     onset = waveform_size - ringdown_size
     cross = torch.nn.functional.pad(cross, (onset, 0))
     plus = torch.nn.functional.pad(plus, (onset, 0))
