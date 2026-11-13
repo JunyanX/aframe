@@ -62,6 +62,16 @@ if WAVEFORM_TYPE == "ringdown":
             "sensitive volume keeps every rejected draw in its "
             "normalization, so dropping vetoed recoveries would bias it"
         )
+    # The plot is a 1x1 or 2x2 grid. Say so before the run starts rather
+    # than when its last rule fails.
+    for _population in POPULATIONS:
+        _num_targets = len(population_cfg(_population, "remnant_mass_combos"))
+        if _num_targets not in (1, 4):
+            raise WorkflowError(
+                f"remnant_mass_combos of population {_population} has "
+                f"{_num_targets} entries, but the ringdown sensitive volume "
+                "plot holds 1 or 4"
+            )
 
     rule compute_sensitive_volume:
         """Compute a population's ringdown sensitive volume vs. FAR for log

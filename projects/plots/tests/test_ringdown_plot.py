@@ -186,6 +186,26 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
     assert "quality ~ Uniform" in html
 
 
+def test_main_rejects_an_unplottable_number_of_targets_first(tmp_path):
+    """The plot is a 1x1 or 2x2 grid, so any other number of targets must
+    fail before a file is read, not after the volume is computed."""
+    from plots.ringdown import main
+    from priors.priors import ringdown_prior
+
+    missing = tmp_path / "missing.hdf5"
+    with pytest.raises(ValueError, match="2x2 or 1x1"):
+        main(
+            missing,
+            missing,
+            missing,
+            ["H1", "L1"],
+            remnant_mass_combos=[40, 80],
+            source_prior=ringdown_prior,
+            output_file=tmp_path / "sensitive_volume.h5",
+            plot_file=tmp_path / "sensitive_volume.html",
+        )
+
+
 def test_main_counts_recoveries_outside_dt_as_misses(campaign, tmp_path):
     """A recovery outside the dt window is a miss that keeps its weight.
 

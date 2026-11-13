@@ -78,6 +78,12 @@ def main(
             that will not normalize.
     """
     configure_logging(log_file, verbose)
+    # style.make_grid draws a 1x1 or 2x2 grid. Say so before any work
+    if len(remnant_mass_combos) not in (1, 4):
+        raise ValueError(
+            "Only support 2x2 or 1x1 grids, can't plot "
+            f"{len(remnant_mass_combos)} targets"
+        )
     background_set = EventSet.read(background)
     foreground_set = RingdownRecoveredInjectionSet.read(foreground)
     rejected = RingdownInjectionParameterSet.read(rejected_params)
