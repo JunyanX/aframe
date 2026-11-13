@@ -208,7 +208,7 @@ def main(
         f.attrs["uncertainty_method"] = (
             "self-normalized importance sampling over ALL draws; rejected "
             "injections and dt-window misses carry their weight with a "
-            "zero detection indicator (design Ruling 6)"
+            "zero detection indicator"
         )
         f.attrs["coverage_floor"] = coverage_floor
         f.attrs["ess_floor"] = ess_floor
