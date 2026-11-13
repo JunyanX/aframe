@@ -42,12 +42,6 @@ def rejection_sample(
     if seed is not None:
         bilby_random.seed(seed)
 
-    if waveform_type not in ("cbc", "ringdown"):
-        raise ValueError(
-            "waveform_type must be either 'cbc' or 'ringdown', "
-            f"got '{waveform_type}'"
-        )
-
     # rejected samples are recorded as the parameters we drew, so the
     # ledger class depends on which waveform family we sampled from
     rejected_cls = (

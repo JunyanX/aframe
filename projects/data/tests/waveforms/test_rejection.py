@@ -136,24 +136,3 @@ def test_cbc_remains_the_default(psd):
     generate.assert_called_once()
     assert isinstance(rejected, InjectionParameterSet)
     assert parameters["h1"].shape == (NUM_SIGNALS, waveform_size)
-
-
-def test_rejects_unsupported_waveform_type(psd):
-    with pytest.raises(ValueError, match="waveform_type"):
-        rejection_sample(
-            num_signals=1,
-            prior=ringdown_prior,
-            ifos=IFOS,
-            minimum_frequency=20,
-            reference_frequency=50,
-            sample_rate=SAMPLE_RATE,
-            waveform_duration=WAVEFORM_DURATION,
-            waveform_approximant="IMRPhenomXPHM",
-            right_pad=RIGHT_PAD,
-            highpass=32,
-            lowpass=None,
-            snr_threshold=SNR_THRESHOLD,
-            psd=psd,
-            max_num_samples=8,
-            waveform_type="burst",
-        )

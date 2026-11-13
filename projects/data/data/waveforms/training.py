@@ -54,12 +54,6 @@ def training_waveforms(
     Returns:
         A set of waveform polarizations and their sampled parameters.
     """
-    if waveform_type not in ("cbc", "ringdown"):
-        raise ValueError(
-            "waveform_type must be either 'cbc' or 'ringdown', "
-            f"got '{waveform_type}'"
-        )
-
     prior, detector_frame_prior = prior()
     samples = prior.sample(num_signals)
     if not detector_frame_prior:

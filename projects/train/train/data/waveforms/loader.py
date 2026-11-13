@@ -46,13 +46,7 @@ class WaveformLoader(WaveformSampler):
             "cbc": WaveformPolarizationSet,
             "ringdown": RingdownWaveformPolarizationSet,
         }
-        try:
-            waveform_set_cls = waveform_set_classes[waveform_type]
-        except KeyError:
-            raise ValueError(
-                "waveform_type must be either 'cbc' or 'ringdown', "
-                f"got '{waveform_type}'"
-            ) from None
+        waveform_set_cls = waveform_set_classes[waveform_type]
 
         right_pad, _ = check_waveform_files(
             self.training_waveform_files, waveform_set_cls

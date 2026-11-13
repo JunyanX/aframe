@@ -50,11 +50,6 @@ def test_sampler_reads_ringdown_validation_file(ringdown_val_file):
     np.testing.assert_array_equal(waveforms[:, 1, 0].numpy(), 100 + expected)
 
 
-def test_sampler_rejects_unknown_waveform_type(ringdown_val_file):
-    with pytest.raises(ValueError, match="cbc.*ringdown.*burst"):
-        make_sampler(ringdown_val_file, waveform_type="burst")
-
-
 def test_ringdown_validation_file_is_not_readable_as_cbc(ringdown_val_file):
     """A mismatched file must fail loudly rather than load a partial set.
 

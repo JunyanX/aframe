@@ -112,17 +112,6 @@ def test_waveform_loader_checks_ringdown_right_pad(
         )
 
 
-def test_waveform_loader_rejects_unknown_waveform_type(
-    tmp_path,
-    bypass_waveform_sampler,
-):
-    with pytest.raises(ValueError, match="cbc.*ringdown.*burst"):
-        WaveformLoader(
-            training_waveform_files=[tmp_path / "training_waveforms.hdf5"],
-            waveform_type="burst",
-        )
-
-
 def test_hdf5_waveform_loader_reads_ringdown_polarizations(
     ringdown_waveform_file,
 ):

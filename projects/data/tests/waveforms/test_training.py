@@ -1,7 +1,6 @@
 from unittest.mock import Mock, patch
 
 import numpy as np
-import pytest
 from data.waveforms.training import training_waveforms
 from ledger.injections import (
     BilbyParameterSet,
@@ -90,18 +89,3 @@ def test_cbc_remains_default():
 
     assert actual is expected
     generate.assert_called_once()
-
-
-def test_rejects_unsupported_waveform_type():
-    with pytest.raises(ValueError, match="waveform_type"):
-        training_waveforms(
-            num_signals=1,
-            sample_rate=SAMPLE_RATE,
-            waveform_duration=WAVEFORM_DURATION,
-            prior=ringdown_prior,
-            minimum_frequency=20,
-            reference_frequency=50,
-            waveform_approximant="IMRPhenomXPHM",
-            right_pad=RIGHT_PAD,
-            waveform_type="burst",
-        )

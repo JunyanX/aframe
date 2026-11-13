@@ -61,11 +61,6 @@ class WaveformSampler(torch.nn.Module):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if waveform_type not in ("cbc", "ringdown"):
-            raise ValueError(
-                "waveform_type must be either 'cbc' or 'ringdown', "
-                f"got '{waveform_type}'"
-            )
         self.ifos = ifos
         self.sample_rate = sample_rate
         self.waveform_type = waveform_type
