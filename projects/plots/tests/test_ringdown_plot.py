@@ -5,9 +5,9 @@ import pytest
 def test_make_grid_cbc_default_unchanged():
     """Regression: the CBC FOUR-combo call is unchanged.
 
-    The one-combo call is not: Step 3 deliberately gives it the y-axis
-    label it currently lacks. That is a visible CBC display change, and
-    `test_make_grid_one_panel_has_a_y_axis_label` pins the new behaviour.
+    The one-combo call is not: it gains the y-axis label it lacked. That
+    is a visible CBC display change, and
+    `test_make_grid_one_panel_has_a_y_axis_label` pins it.
     """
     from plots.core.style import make_grid
 
@@ -58,9 +58,6 @@ def campaign(tmp_path):
     # One year of background livetime, so far_threshold_grid has ranks to
     # work with at the default max_far.
     tb = 60 * 60 * 24 * 365.25
-    # EventSet declares exactly detection_statistic, detection_time,
-    # shift and the Tb metadata (events.py:42-56). It takes NO `ifos`;
-    # passing one raises TypeError. Verified against the tree.
     background = EventSet(
         detection_statistic=rng.normal(0, 1, n_back),
         detection_time=rng.uniform(0, tb, n_back),
@@ -92,10 +89,7 @@ def campaign(tmp_path):
     rej_path = tmp_path / "rejected-parameters.hdf5"
     rejected.write(rej_path)
 
-    # The foreground and rejected constructors carry more fields than
-    # EventSet; if one does not match, read
-    # libs/ledger/ledger/injections.py and adjust. Do NOT fall back to
-    # the private campaign path.
+    # the foreground holds the ringdown parameters
     with h5py.File(fore_path) as f:
         assert "frequency" in (f["parameters"] if "parameters" in f else f)
 
@@ -103,11 +97,8 @@ def campaign(tmp_path):
 
 
 def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
-    """Integration test: call main() and inspect what it wrote.
-
-    The other tests here only exercise make_grid and a constant. The
-    design requires the epsilon and Q assumptions on every figure and
-    coverage information in the annotations; nothing else checks that.
+    """Call main() and inspect what it wrote: the epsilon and Q
+    assumptions in the file and on the figure, and each target's coverage.
     """
     import h5py
     from plots.ringdown import main

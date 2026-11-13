@@ -1,8 +1,7 @@
 """The generation CLIs carry the waveform family into the files they write.
 
-These replace the Luigi task tests from the old branch, which checked that
-each task forwarded `waveform_type`. Every Snakemake rule calls one of
-these CLIs, so this is where the family has to arrive.
+Every Snakemake rule calls one of these CLIs, so this is where the family
+has to arrive.
 """
 
 import pytest

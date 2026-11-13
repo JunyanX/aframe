@@ -38,7 +38,8 @@ def test_redshift_ratio_norm(source_prior):
 
 
 def test_weight_is_proportional_to_closed_form(source_prior):
-    """Design Ruling 3(a): constancy is the assertion, not the value."""
+    """The weight is the closed form times a constant. Constancy is the
+    assertion, not the value."""
     from priors.priors import log_normal_remnant_mass
 
     rng = np.random.default_rng(0)
@@ -65,7 +66,7 @@ def test_weight_is_proportional_to_closed_form(source_prior):
     log_w = log_importance_weights(m_src, f, z, source_prior, target, c_z)
     oracle = target["remnant_mass_source"].prob(m_src) * m_src / (1 + z)
     ratio = np.exp(log_w) / oracle
-    # Ruling 3(b): the constant is ln(10) * C_z under the stated
+    # The constant is ln(10) * C_z under the stated
     # convention. Tolerance follows bilby's interpolated distance prior,
     # not machine precision.
     assert np.allclose(ratio, ratio[0], rtol=1e-6)
@@ -80,9 +81,10 @@ def test_normalize_log_weights_sums_to_one():
 
 
 def test_normalize_log_weights_survives_extreme_lognormal():
-    """Ruling 4: this case is numerically fine and statistically useless.
+    """This case is numerically fine and statistically useless.
 
-    It must NOT raise from the arithmetic guard; ESS rejects it (Task 5).
+    It must NOT raise from the arithmetic guard; the effective sample
+    size check in `plots.ringdown.main` rejects it.
     """
     m = np.array([40.0, 80.0, 150.0, 240.0])
     m0, sigma = 1000.0, 0.01
@@ -127,7 +129,7 @@ def test_support_coverage_full_for_defaults(source_prior):
 
 
 def test_support_coverage_reproduces_the_250_case(source_prior):
-    """Design Established facts: 0.249103873 under the TARGET z measure."""
+    """Coverage is 0.249103873 under the TARGET z measure."""
     from plots.core.ringdown_stats import support_coverage
 
     got = support_coverage(250.0, 0.1, source_prior, Planck15)
@@ -137,7 +139,7 @@ def test_support_coverage_reproduces_the_250_case(source_prior):
 
 
 def test_conditioning_shifts_marginals_above_the_warning_floor(source_prior):
-    """Ruling 3(c): conditioning applies at any coverage < 1."""
+    """Conditioning applies at any coverage < 1."""
     from plots.core.ringdown_stats import (
         conditioned_means,
         support_coverage,
@@ -225,7 +227,7 @@ def population_sample(source_prior, z_of_distance):
 
 
 def test_weighted_population_matches_p_s(source_prior, population_sample):
-    """Design Ruling 3(c): the INDEPENDENT target-identity test.
+    """The INDEPENDENT target-identity test.
 
     The quadrature tests above only compare `conditioned_means` with
     reference constants. This one compares the population the WEIGHTS
@@ -308,8 +310,7 @@ def test_far_grid_lengths_match():
 
 
 def test_far_grid_caps_at_available_background():
-    """max_events > len(background): CBC silently returns 365 FARs
-    against 10 thresholds."""
+    """A cap that admits more events than the background holds."""
     from plots.core.ringdown_stats import (
         SECONDS_PER_YEAR,
         far_threshold_grid,
@@ -321,8 +322,7 @@ def test_far_grid_caps_at_available_background():
 
 
 def test_far_grid_rejects_short_livetime():
-    """max_events == 0: CBC returns an empty FAR axis against the whole
-    threshold array, because [-0:] is the full slice."""
+    """A livetime too short for any event's rate to be within the cap."""
     from plots.core.ringdown_stats import far_threshold_grid
 
     with pytest.raises(ValueError, match="no background rank"):
@@ -374,16 +374,15 @@ def test_far_grid_credits_tie_group_with_true_exceedance_rate():
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
 def test_far_grid_rejects_non_finite_background(bad):
-    """NaN sorts ABOVE every finite value, so it becomes the top
+    """NaN sorts ABOVE every finite value, so it would become the top
     threshold at the lowest FAR while `statistic >= nan` is false for
-    every event. Reproduced against the committed helper:
+    every event. Without the check:
 
         bg = [1.0, 2.0, nan] -> thresholds [nan, 2, 1] at FARs [1, 2, 3]
                                 actual inclusive counts:   [0, 1, 2]
 
-    Every finite threshold's rate was wrong too, not only the NaN's, and
-    the run still exited 0 and wrote both output files. The raise has to
-    come before any of that.
+    Every finite threshold's rate would be wrong too, not only the NaN's,
+    and nothing downstream would notice.
 
     +inf and -inf are rejected as well, and none of the three is silently
     dropped: dropping would leave Tb describing a livetime the surviving
@@ -399,24 +398,18 @@ def test_far_grid_rejects_non_finite_background(bad):
 
 
 # tb_years * (1/tb_years) rounds to 0.9999999999999999 at this livetime,
-# which is what makes the three cases below discriminate between
-# candidate bounds that differ only at a floating-point boundary.
+# which is what makes the case below discriminate between
+# bounds that differ only at a floating-point boundary.
 _TB_BOUNDARY = 100006.0
 
 
 def test_far_grid_three_event_boundary_exercises_the_bound():
-    """THE mutation gate for the candidate bound.
+    """The number of loudest events to look at, at a floating-point
+    boundary.
 
-    The full-background rate is 946.65/yr against a cap of 631.10/yr, so
-    the full-background branch does not fire and the bound is genuinely
-    evaluated. Re-derived against this implementation:
-
-        [9.0]           committed [9.]     here [9.]     floor [9.]
-        [8.0, 9.0]      committed [9. 8.]  here [9. 8.]  floor [9. 8.]
-        [7.0, 8.0, 9.0] committed [9. 8.]  here [9. 8.]  floor [9.]
-
-    `p = max_far * tb_years` is 1.9999999999999998 in the third case, so
-    a `floor` bound takes k=1 and loses the 8.0 threshold.
+    The cap is exactly the rate of two events, but
+    `p = max_far * tb_years` comes out as 1.9999999999999998. Looking at
+    `floor(p)` events would find one and lose the 8.0 threshold.
     """
     from plots.core.ringdown_stats import (
         SECONDS_PER_YEAR,
@@ -433,7 +426,7 @@ def test_far_grid_three_event_boundary_exercises_the_bound():
 
 
 def test_far_grid_accepts_caps_that_overflow_a_naive_bound():
-    """Caps the committed helper accepts and must keep accepting.
+    """An infinite cap means no cap, and a huge one must not overflow.
 
     `int(np.ceil(max_far * tb_years))` raises OverflowError on both.
     """

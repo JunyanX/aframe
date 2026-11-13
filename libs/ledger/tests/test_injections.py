@@ -460,8 +460,9 @@ RINGDOWN_RESPONSE_SET_FIELDS = [
 class TestRingdownResponseSet:
     """The ringdown counterpart of TestLigoResponseSet.
 
-    Only covers what the split has to preserve: the parameter schema, and
-    the four timing/injection methods now inherited from ResponseSetBase.
+    Only covers what differs, the parameter schema. The timing and
+    injection methods are inherited from ResponseSetBase, which
+    TestLigoResponseSet exercises.
     """
 
     @pytest.fixture
@@ -497,7 +498,7 @@ class TestRingdownRemnantProperties:
         )
 
     def test_remnant_mass_known_values(self, params):
-        # ml4gw ringdown.py:79-84 inverted, converted to Msun
+        # the fits in ml4gw.waveforms.adhoc.Ringdown inverted, in Msun
         np.testing.assert_allclose(
             params.remnant_mass,
             np.array([169.0, 89.16, 46.01]),

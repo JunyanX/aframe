@@ -246,8 +246,7 @@ class TestRingdownRecoveredInjectionSet:
         shifts = np.array([0] * 3 + [1] * 3)
 
         # duration and right_pad are required: aggregate() raises
-        # KeyError on a populated source that omits metadata, which is
-        # behaviour the previous branch deliberately preserved
+        # KeyError on a populated source that omits metadata
         params = {
             "injection_time": times,
             "shift": shifts,
@@ -285,7 +284,7 @@ class TestRingdownRecoveredInjectionSet:
     def test_aggregates_two_branches(
         self, event_set, ringdown_response_set, tmp_path
     ):
-        """The merge path Task 2 will call must work for ringdowns."""
+        """The merge that inference runs on each group's foregrounds."""
         obj = events.RingdownRecoveredInjectionSet.recover(
             event_set, ringdown_response_set
         )
