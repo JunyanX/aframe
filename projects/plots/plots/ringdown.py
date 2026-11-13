@@ -1,9 +1,9 @@
 """Ringdown sensitive volume, the sibling of `plots.main`.
 
-Differs from the CBC path in five places: the weight construction, the
+Differs from the CBC path in four places: the weight construction, the
 volume bounds (derived from the distance prior rather than read from a
-redshift key), the variance (computed over every draw), the absence of a
-GWTC-3 comparison set, and the absence of vetoes.
+redshift key), the absence of a GWTC-3 comparison set, and the absence of
+vetoes.
 
 Vetoes are deliberately omitted. The CBC entry point carries optional O3
 CBC veto categories, gate windows and catalog exclusions; the ringdown
@@ -35,6 +35,7 @@ from utils.logging import configure_logging
 
 from plots.core import ringdown_stats as rs
 from plots.core import style
+from plots.core.compute import sensitive_volume
 
 
 def _prior_description(prior, key):
@@ -111,21 +112,17 @@ def main(
     frequency = np.concatenate([foreground_set.frequency, rejected.frequency])
 
     n_fore = len(foreground_set)
-    statistic = np.concatenate(
-        [
-            foreground_set.detection_statistic,
-            np.full(len(rejected), -np.inf),
-        ]
-    )
-    detected = np.zeros(len(statistic), dtype=bool)
-    detected[:n_fore] = True
+    # A recovery outside the dt window is a miss that keeps its weight:
+    # -inf puts it below every threshold.
+    statistic = foreground_set.detection_statistic
     if dt is not None:
-        detected[:n_fore] = (
+        in_window = (
             np.abs(
                 foreground_set.detection_time - foreground_set.injection_time
             )
             <= dt
         )
+        statistic = np.where(in_window, statistic, -np.inf)
 
     fars, thresholds = rs.far_threshold_grid(
         background_set.detection_statistic, background_set.Tb, max_far
@@ -170,7 +167,14 @@ def main(
             else None
         )
 
-    mu, err = rs.sensitive_volume(statistic, detected, weights, thresholds)
+    # Rejected draws can never be detected, so they enter through the
+    # normalization of the weights and, in the error, through missed_w2.
+    mu, err = sensitive_volume(
+        statistic,
+        weights[:, :n_fore],
+        thresholds,
+        missed_w2=(weights[:, n_fore:] ** 2).sum(axis=-1),
+    )
     sv, sv_err = mu * v0, err * v0
 
     epsilon_desc = _prior_description(source, "epsilon")

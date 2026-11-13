@@ -186,6 +186,42 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
     assert "quality ~ Uniform" in html
 
 
+def test_main_counts_recoveries_outside_dt_as_misses(campaign, tmp_path):
+    """A recovery outside the dt window is a miss that keeps its weight.
+
+    The fixture draws detection and injection times independently over a
+    year, so a window of 1e7 s holds about half the recoveries and a
+    window of zero holds none.
+    """
+    import h5py
+    from plots.ringdown import main
+    from priors.priors import ringdown_prior
+
+    back, fore, rej = campaign
+    volumes = {}
+    for name, dt in (("none", None), ("half", 1e7), ("zero", 0.0)):
+        output_file = tmp_path / name / "sensitive_volume.h5"
+        main(
+            back,
+            fore,
+            rej,
+            ["H1", "L1"],
+            remnant_mass_combos=[40, 80, 120, 150],
+            source_prior=ringdown_prior,
+            output_file=output_file,
+            plot_file=tmp_path / name / "sensitive_volume.html",
+            dt=dt,
+        )
+        with h5py.File(output_file) as f:
+            targets = sorted(k for k in f if k not in ("fars", "thresholds"))
+            volumes[name] = np.stack([f[k]["sv"][:] for k in targets])
+
+    assert (volumes["none"] > 0).any()
+    assert (volumes["half"] <= volumes["none"]).all()
+    assert (volumes["half"] < volumes["none"]).any()
+    assert (volumes["zero"] == 0).all()
+
+
 def test_main_rejects_a_target_below_the_ess_floor(campaign, tmp_path):
     """The ESS policy must fire, not the conditioned-means guard."""
     from plots.ringdown import main
