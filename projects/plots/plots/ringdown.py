@@ -169,8 +169,6 @@ def main(
             )
         conditioning.append(
             rs.conditioned_means(m0, sigma, source, DEFAULT_COSMOLOGY)
-            if coverage < 1
-            else None
         )
 
     # Rejected draws can never be detected, so they enter through the
@@ -225,14 +223,8 @@ def main(
             g.attrs["remnant_mass_median"] = m0
             g.attrs["support_coverage"] = coverages[i]
             g.attrs["effective_sample_size"] = ess_values[i]
-            g.attrs["support_conditioned"] = coverages[i] < 1
-            if conditioning[i] is not None:
-                g.attrs["conditioned_mean_quality"] = conditioning[i][
-                    "quality"
-                ]
-                g.attrs["conditioned_mean_redshift"] = conditioning[i][
-                    "redshift"
-                ]
+            g.attrs["conditioned_mean_quality"] = conditioning[i]["quality"]
+            g.attrs["conditioned_mean_redshift"] = conditioning[i]["redshift"]
 
     figures = style.make_grid(
         list(remnant_mass_combos),
@@ -262,8 +254,6 @@ def main(
         # Renderer, but a Div is a widget and is rejected. Plain text only
         # -- Title does not render HTML.
         note = f"coverage {coverages[i]:.4f} | ESS {ess_values[i]:.1f}"
-        if coverages[i] < 1:
-            note += " | conditioned on support"
         if coverages[i] < coverage_floor:
             note += " | BELOW COVERAGE FLOOR"
         p.add_layout(

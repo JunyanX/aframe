@@ -180,10 +180,17 @@ def test_main_writes_assumptions_and_diagnostics(campaign, tmp_path):
             # the floor, but no longer ~1.
             assert g.attrs["support_coverage"] >= f.attrs["coverage_floor"]
             assert np.isfinite(g.attrs["effective_sample_size"])
+            # Coverage of a log normal over a finite box is always below
+            # one, so every target carries its conditioned means and no
+            # flag says which ones do.
+            assert np.isfinite(g.attrs["conditioned_mean_quality"])
+            assert np.isfinite(g.attrs["conditioned_mean_redshift"])
+            assert "support_conditioned" not in g.attrs
 
     html = (out / "sensitive_volume.html").read_text()
     assert "epsilon ~ Uniform" in html
     assert "quality ~ Uniform" in html
+    assert "conditioned on support" not in html
 
 
 def test_main_rejects_an_unplottable_number_of_targets_first(tmp_path):
