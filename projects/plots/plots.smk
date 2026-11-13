@@ -94,7 +94,6 @@ if WAVEFORM_TYPE == "ringdown":
         resources:
             **rule_resources("sensitive_volume", "plots"),
         params:
-            ifos=_fmt_list(config["ifos"]),
             remnant_mass_combos=lambda wc: _fmt_list(
                 population_cfg(wc.population, "remnant_mass_combos")
             ),
@@ -106,7 +105,6 @@ if WAVEFORM_TYPE == "ringdown":
             " --background {input.background}"
             " --foreground {input.foreground}"
             " --rejected_params {input.rejected_params}"
-            " --ifos '{params.ifos}'"
             " --remnant_mass_combos '{params.remnant_mass_combos}'"
             " --sigma {params.sigma}"
             " --source_prior {params.source_prior}"

@@ -48,7 +48,6 @@ def main(
     background: Path,
     foreground: Path,
     rejected_params: Path,
-    ifos: list[str],
     remnant_mass_combos: list[float],
     source_prior: Callable,
     output_file: Path,
