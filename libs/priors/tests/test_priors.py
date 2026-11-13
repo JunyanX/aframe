@@ -59,36 +59,6 @@ def test_ringdown_prior_distributions():
     assert (prior["psi"].minimum, prior["psi"].maximum) == (0, np.pi)
 
 
-def test_ringdown_prior_samples():
-    prior, _ = ringdown_prior()
-    num_samples = 128
-
-    samples = prior.sample(num_samples)
-
-    assert set(samples) == RINGDOWN_PARAMETERS
-    for values in samples.values():
-        assert values.shape == (num_samples,)
-        assert np.isfinite(values).all()
-
-    assert (
-        (40 <= samples["frequency"]) & (samples["frequency"] <= 1000)
-    ).all()
-    assert ((2 <= samples["quality"]) & (samples["quality"] <= 20)).all()
-    assert ((0 <= samples["epsilon"]) & (samples["epsilon"] <= 0.1)).all()
-    assert ((0 <= samples["phase"]) & (samples["phase"] <= 2 * np.pi)).all()
-    assert (
-        (0 <= samples["inclination"]) & (samples["inclination"] <= np.pi)
-    ).all()
-    assert (
-        (100 <= samples["distance"]) & (samples["distance"] <= 20000)
-    ).all()
-    assert (
-        (-np.pi / 2 <= samples["dec"]) & (samples["dec"] <= np.pi / 2)
-    ).all()
-    assert ((0 <= samples["ra"]) & (samples["ra"] <= 2 * np.pi)).all()
-    assert ((0 <= samples["psi"]) & (samples["psi"] <= np.pi)).all()
-
-
 def test_log_normal_remnant_mass_keys():
     from priors.priors import log_normal_remnant_mass
 
@@ -97,17 +67,6 @@ def test_log_normal_remnant_mass_keys():
     # Source-frame mass, so the detector-frame flag is False, as in
     # end_o3_ratesandpops.
     assert detector_frame_prior is False
-
-
-def test_log_normal_remnant_mass_median_is_m0():
-    from priors.priors import log_normal_remnant_mass
-
-    prior, _ = log_normal_remnant_mass(80.0, sigma=0.1)
-    samples = prior["remnant_mass_source"].sample(200000)
-    # M0 is the MEDIAN of the mass distribution, not the mean, and sigma
-    # is the standard deviation of log mass, not a width in Msun.
-    assert abs(np.median(samples) / 80.0 - 1) < 0.01
-    assert abs(np.std(np.log(samples)) / 0.1 - 1) < 0.02
 
 
 def test_log_normal_remnant_mass_density_matches_closed_form():

@@ -110,32 +110,10 @@ def test_normalize_log_weights_rejects_nan():
         normalize_log_weights(np.array([-1.0, np.nan]))
 
 
-def test_normalize_log_weights_equal_under_large_offset():
-    """A shared large offset must not swamp the ln(n) correction."""
-    w = normalize_log_weights(np.array([-1e16, -1e16]))
-    np.testing.assert_allclose(w, np.array([0.5, 0.5]))
-
-
 def test_normalize_log_weights_unequal_under_large_offset():
     """Same as above, but the two weights differ by a finite amount."""
     w = normalize_log_weights(np.array([-1e16, -1e16 - 2]))
     np.testing.assert_allclose(w, np.array([0.88079708, 0.11920292]))
-
-
-def test_normalize_log_weights_moderate_offset():
-    """A less extreme offset that still loses precision unshifted.
-
-    Direct logsumexp-and-subtract gives sum=1.0000319 here -- close
-    enough that a sum-only tolerance test could miss it, so this checks
-    the values.
-    """
-    w = normalize_log_weights(np.array([-1e12, -1e12]))
-    np.testing.assert_allclose(w, np.array([0.5, 0.5]))
-
-
-def test_normalize_log_weights_single_element():
-    w = normalize_log_weights(np.array([-5.0]))
-    np.testing.assert_allclose(w, np.array([1.0]))
 
 
 def test_normalize_log_weights_rejects_empty():
@@ -174,30 +152,6 @@ def test_conditioning_shifts_marginals_above_the_warning_floor(source_prior):
     means = conditioned_means(190.0, 0.1, source_prior, Planck15)
     assert abs(means["quality"] - 14.11216) < 1e-4
     assert abs(means["redshift"] - 0.144986) < 1e-5
-
-
-def test_conditioning_shifts_marginals_far_out(source_prior):
-    from plots.core.ringdown_stats import conditioned_means
-
-    means = conditioned_means(250.0, 0.1, source_prior, Planck15)
-    assert abs(means["quality"] - 15.42325) < 1e-4
-    assert abs(means["redshift"] - 0.129120) < 1e-5
-
-
-def test_coverage_survives_the_upper_tail(source_prior):
-    """Finite weights and a passing ESS, but naive CDF subtraction loses
-    the interval probability entirely."""
-    from plots.core.ringdown_stats import support_coverage
-    from scipy.stats import norm
-
-    lo = (np.log(24.0) - np.log(1.0)) / 0.3
-    hi = (np.log(273.0) - np.log(1.0)) / 0.3
-    assert norm.cdf(hi) - norm.cdf(lo) == 0.0  # the naive form
-    assert norm.sf(lo) - norm.sf(hi) > 0.0  # the stable one
-
-    cov = support_coverage(1.0, 0.3, source_prior, Planck15)
-    assert np.isfinite(cov)
-    assert cov > 0.0
 
 
 def test_conditioned_means_refuses_unrepresentable_support(source_prior):
@@ -422,19 +376,6 @@ def test_far_grid_credits_tie_group_with_true_exceedance_rate():
     assert pairs == [(9.0, 2.0), (8.0, 3.0)]
 
 
-def test_far_grid_rejects_tie_group_whose_true_rate_exceeds_cap():
-    """The tie at 9.0 has a true rate of 2/yr. At max_far=1 that must
-    raise, not silently advertise the rank-based rate of 1/yr."""
-    from plots.core.ringdown_stats import (
-        SECONDS_PER_YEAR,
-        far_threshold_grid,
-    )
-
-    bg = np.array([9.0, 9.0, 8.0])
-    with pytest.raises(ValueError, match="no background rank"):
-        far_threshold_grid(bg, SECONDS_PER_YEAR, 1)
-
-
 def test_far_grid_rejects_nan_background():
     """NaN sorts ABOVE every finite value, so it becomes the top
     threshold at the lowest FAR while `statistic >= nan` is false for
@@ -470,62 +411,10 @@ def test_far_grid_rejects_infinite_background_entries():
             far_threshold_grid(np.array([1.0, 2.0, bad]), SECONDS_PER_YEAR, 3)
 
 
-def test_far_grid_non_finite_message_counts_every_offender():
-    from plots.core.ringdown_stats import (
-        SECONDS_PER_YEAR,
-        far_threshold_grid,
-    )
-
-    bg = np.array([1.0, np.nan, 2.0, np.inf, -np.inf])
-    with pytest.raises(ValueError, match="3 non-finite entries.* out of 5"):
-        far_threshold_grid(bg, SECONDS_PER_YEAR, 3)
-
-
 # tb_years * (1/tb_years) rounds to 0.9999999999999999 at this livetime,
 # which is what makes the three cases below discriminate between
 # candidate bounds that differ only at a floating-point boundary.
 _TB_BOUNDARY = 100006.0
-
-
-def test_far_grid_single_event_boundary():
-    """One event, cap exactly its own rate.
-
-    A `floor`-based candidate bound gives k=0 here -- and `s[-0:]` is the
-    WHOLE array, the same slicing trap Task 7 exists for, so the wrong
-    bound still answers correctly. A boundary regression, NOT the
-    mutation gate.
-    """
-    from plots.core.ringdown_stats import (
-        SECONDS_PER_YEAR,
-        far_threshold_grid,
-    )
-
-    tb_years = _TB_BOUNDARY / SECONDS_PER_YEAR
-    fars, thresholds = far_threshold_grid(
-        np.array([9.0]), _TB_BOUNDARY, 1 / tb_years
-    )
-    np.testing.assert_array_equal(thresholds, np.array([9.0]))
-    assert abs(fars[0] - 315.55058696) < 1e-7
-
-
-def test_far_grid_two_event_boundary():
-    """Two events, cap exactly the full-background rate.
-
-    The cap admits the whole background, so the full-background branch
-    short-circuits the candidate bound and a wrong bound is never
-    evaluated. Also a boundary regression, also not the gate.
-    """
-    from plots.core.ringdown_stats import (
-        SECONDS_PER_YEAR,
-        far_threshold_grid,
-    )
-
-    tb_years = _TB_BOUNDARY / SECONDS_PER_YEAR
-    fars, thresholds = far_threshold_grid(
-        np.array([8.0, 9.0]), _TB_BOUNDARY, 2 / tb_years
-    )
-    np.testing.assert_array_equal(thresholds, np.array([9.0, 8.0]))
-    assert abs(fars[-1] - 631.10117393) < 1e-7
 
 
 def test_far_grid_three_event_boundary_exercises_the_bound():

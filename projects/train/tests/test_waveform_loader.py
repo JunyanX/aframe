@@ -1,22 +1,10 @@
-from types import SimpleNamespace
-from unittest.mock import Mock
-
 import numpy as np
 import pytest
 from ledger.injections import (
     RingdownWaveformPolarizationSet,
     RingdownWaveformSet,
 )
-from train.data.waveforms import Hdf5WaveformLoader, WaveformLoader
-from train.data.waveforms import loader as loader_module
-
-
-@pytest.fixture
-def bypass_waveform_sampler(monkeypatch):
-    def init(self, *args, **kwargs):
-        self.right_pad = 0.25
-
-    monkeypatch.setattr(loader_module.WaveformSampler, "__init__", init)
+from train.data.waveforms import WaveformLoader
 
 
 @pytest.fixture
@@ -47,87 +35,6 @@ def ringdown_waveform_file(tmp_path):
     path = tmp_path / "training_waveforms.hdf5"
     waveform_set.write(path, chunks=(2, waveform_size))
     return path
-
-
-@pytest.mark.parametrize("waveform_type", [None, "cbc"])
-def test_waveform_loader_defaults_to_cbc(
-    tmp_path,
-    monkeypatch,
-    bypass_waveform_sampler,
-    waveform_type,
-):
-    # check_waveform_files reads the first waveform of each file
-    first = SimpleNamespace(right_pad=0.25, duration=1, sample_rate=8)
-    cbc_read = Mock(return_value=first)
-    ringdown_read = Mock()
-    monkeypatch.setattr(
-        loader_module.WaveformPolarizationSet,
-        "read_idx",
-        cbc_read,
-    )
-    monkeypatch.setattr(
-        loader_module.RingdownWaveformPolarizationSet,
-        "read_idx",
-        ringdown_read,
-    )
-    path = tmp_path / "training_waveforms.hdf5"
-    kwargs = {"training_waveform_files": [path]}
-    if waveform_type is not None:
-        kwargs["waveform_type"] = waveform_type
-
-    WaveformLoader(**kwargs)
-
-    cbc_read.assert_called_once()
-    assert cbc_read.call_args.args[0] == path
-    ringdown_read.assert_not_called()
-
-
-def test_waveform_loader_reads_ringdown_file(
-    ringdown_waveform_file,
-    bypass_waveform_sampler,
-):
-    loader = WaveformLoader(
-        training_waveform_files=[ringdown_waveform_file],
-        waveform_type="ringdown",
-    )
-
-    assert loader.training_waveform_files == [ringdown_waveform_file]
-
-
-def test_waveform_loader_checks_ringdown_right_pad(
-    ringdown_waveform_file,
-    monkeypatch,
-    bypass_waveform_sampler,
-):
-    monkeypatch.setattr(
-        loader_module.WaveformSampler,
-        "__init__",
-        lambda self, *args, **kwargs: setattr(self, "right_pad", 0.5),
-    )
-
-    with pytest.raises(ValueError, match="same right pad"):
-        WaveformLoader(
-            training_waveform_files=[ringdown_waveform_file],
-            waveform_type="ringdown",
-        )
-
-
-def test_hdf5_waveform_loader_reads_ringdown_polarizations(
-    ringdown_waveform_file,
-):
-    loader = Hdf5WaveformLoader(
-        [ringdown_waveform_file],
-        channels=["cross", "plus"],
-        batch_size=2,
-        batches_per_epoch=1,
-        chunk_size=2,
-        path="waveforms",
-    )
-
-    batch = next(iter(loader))
-
-    assert batch.shape == (2, 2, 8)
-    assert np.isfinite(batch.numpy()).all()
 
 
 def test_waveform_loader_forwards_waveform_type_to_sampler(

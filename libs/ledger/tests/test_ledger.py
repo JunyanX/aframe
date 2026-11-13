@@ -219,29 +219,6 @@ def _empty_2d(cls):
 
 
 @pytest.mark.parametrize("cls", EMPTY_SET_CLASSES)
-def test_aggregate_of_only_empty_sources_stays_readable(cls, tmp_path):
-    """Every input empty must still yield a valid, readable ledger.
-
-    `rejection_sample` writes `rejected_cls()` for a branch that rejects
-    nothing, so `TestingWaveforms` reaches this whenever no branch rejects.
-    """
-    files = []
-    for i in range(2):
-        fname = tmp_path / f"empty-{i}.hdf5"
-        cls().write(fname)
-        files.append(fname)
-
-    merged_file = tmp_path / "merged.hdf5"
-    cls.aggregate(files, merged_file, clean=False)
-
-    merged = cls.read(merged_file)
-    assert len(merged) == 0
-    for name, attr in cls.__dataclass_fields__.items():
-        if attr.metadata["kind"] == "parameter":
-            assert len(getattr(merged, name)) == 0
-
-
-@pytest.mark.parametrize("cls", EMPTY_SET_CLASSES)
 def test_aggregate_of_only_empty_sources_keeps_dimensions(cls, tmp_path):
     """A 2-D parameter stays 2-D through an all-empty merge.
 

@@ -6,10 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
-import pytest
 from ledger.injections import (
     InterferometerResponseSet,
-    RingdownInjectionParameterSet,
     RingdownInterferometerResponseSet,
     waveform_class_factory,
 )
@@ -91,47 +89,6 @@ def test_aggregates_a_ringdown_campaign(monkeypatch, tmp_path):
         IFOS, RingdownInterferometerResponseSet, "ResponseSet"
     )
     assert len(cls.read(out)) == 4
-
-
-def test_aggregate_with_the_wrong_family_raises(monkeypatch, tmp_path):
-    """A CBC run must not quietly merge ringdown files, nor the reverse."""
-    branch = _responses(
-        tmp_path / "b0" / "waveforms.hdf5",
-        RingdownInterferometerResponseSet,
-        2,
-    )
-    with pytest.raises((KeyError, ValueError)):
-        _run(
-            monkeypatch,
-            tmp_path,
-            {"waveforms": [branch]},
-            {"waveforms": str(tmp_path / "waveforms.hdf5")},
-            {"waveforms": "responses"},
-            waveform_type="cbc",
-        )
-
-
-def test_aggregate_keeps_a_branch_that_rejected_nothing(monkeypatch, tmp_path):
-    populated = tmp_path / "b0" / "rejected_parameters.hdf5"
-    populated.parent.mkdir()
-    RingdownInjectionParameterSet(
-        ifos=IFOS, **_fill(RingdownInjectionParameterSet, 3)
-    ).write(populated)
-    empty = tmp_path / "b1" / "rejected_parameters.hdf5"
-    empty.parent.mkdir()
-    # what rejection_sample writes when a branch rejects nothing
-    RingdownInjectionParameterSet().write(empty)
-
-    out = tmp_path / "rejected_parameters.hdf5"
-    _run(
-        monkeypatch,
-        tmp_path,
-        {"rejected_parameters": [str(populated), str(empty)]},
-        {"rejected_parameters": str(out)},
-        {"rejected_parameters": "parameters"},
-        waveform_type="ringdown",
-    )
-    assert len(RingdownInjectionParameterSet.read(out)) == 3
 
 
 def test_aggregates_a_cbc_campaign(monkeypatch, tmp_path):

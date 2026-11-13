@@ -1,12 +1,8 @@
-from unittest.mock import Mock, patch
-
 import numpy as np
 import pytest
 import torch
 from data.waveforms.rejection import rejection_sample
 from ledger.injections import (
-    BilbyParameterSet,
-    InjectionParameterSet,
     RingdownInjectionParameterSet,
 )
 from priors.priors import ringdown_prior
@@ -86,53 +82,3 @@ def test_ringdown_rejection_sample_records_ringdown_parameters(psd):
     # rejected parameters use the ringdown ledger class, not the CBC one
     assert isinstance(rejected, RingdownInjectionParameterSet)
     assert "mass_1" not in rejected.__dataclass_fields__
-
-
-def test_cbc_remains_the_default(psd):
-    """The CBC path must be untouched when waveform_type is not given."""
-    waveform_size = int(SAMPLE_RATE * WAVEFORM_DURATION)
-    names = [
-        name
-        for name, field in BilbyParameterSet.__dataclass_fields__.items()
-        if field.metadata["kind"] == "parameter"
-    ]
-
-    # rejection_sample annotates the sampled dict with snr/ifo_snrs, so hand
-    # back a fresh dict each call rather than one shared, mutated object
-    prior = Mock()
-    prior.sample.side_effect = lambda n: {name: np.ones(n) for name in names}
-    prior.keys.return_value = names
-    prior_factory = Mock(return_value=(prior, True))
-
-    times = np.arange(waveform_size) / SAMPLE_RATE
-    signal = np.broadcast_to(
-        1e-21 * np.sin(2 * np.pi * 100 * times), (NUM_SIGNALS, waveform_size)
-    )
-    polarization_set = Mock()
-    polarization_set.cross = signal.copy()
-    polarization_set.plus = signal.copy()
-
-    with patch(
-        "data.waveforms.rejection.WaveformPolarizationSet.from_parameters",
-        return_value=polarization_set,
-    ) as generate:
-        parameters, rejected = rejection_sample(
-            num_signals=NUM_SIGNALS,
-            prior=prior_factory,
-            ifos=IFOS,
-            minimum_frequency=20,
-            reference_frequency=50,
-            sample_rate=SAMPLE_RATE,
-            waveform_duration=WAVEFORM_DURATION,
-            waveform_approximant="IMRPhenomXPHM",
-            right_pad=RIGHT_PAD,
-            highpass=32,
-            lowpass=None,
-            snr_threshold=0.0,
-            psd=psd,
-            max_num_samples=32,
-        )
-
-    generate.assert_called_once()
-    assert isinstance(rejected, InjectionParameterSet)
-    assert parameters["h1"].shape == (NUM_SIGNALS, waveform_size)

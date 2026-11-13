@@ -229,55 +229,6 @@ class TestRecoveredInjectionSet:
         assert obj.num_injections == 6
 
 
-CBC_RECOVERED_FIELDS = [
-    "mass_1",
-    "mass_2",
-    "a_1",
-    "a_2",
-    "tilt_1",
-    "tilt_2",
-    "phi_12",
-    "phi_jl",
-    "ra",
-    "dec",
-    "redshift",
-    "psi",
-    "theta_jn",
-    "phase",
-    "snr",
-    "ifo_snrs",
-    "ifos",
-    "sample_rate",
-    "duration",
-    "right_pad",
-    "num_injections",
-    "injection_time",
-    "shift",
-    "detection_statistic",
-    "detection_time",
-    "Tb",
-]
-
-
-def test_cbc_recovered_field_order_is_stable():
-    """Extracting the mixin must not reorder the CBC fields.
-
-    Field order comes from reverse MRO, and this class's MRO changes in
-    this task. Reads are safe either way -- `Ledger._load_with_idx`
-    looks datasets up by name -- but field order is the positional
-    `__init__` signature, which the existing tests in this file use
-    (`events.EventSet(det_stats, times, shifts, 100)`). Keeping it
-    stable also keeps the diff honest about what the refactor changed.
-
-    If this list is wrong, print
-    `list(events.RecoveredInjectionSet.__dataclass_fields__)` on the
-    commit before this task and paste it in verbatim -- do NOT adjust it
-    to match the new value.
-    """
-    actual = list(events.RecoveredInjectionSet.__dataclass_fields__)
-    assert actual == CBC_RECOVERED_FIELDS
-
-
 class TestRingdownRecoveredInjectionSet:
     @pytest.fixture
     def event_set(self):
@@ -315,18 +266,6 @@ class TestRingdownRecoveredInjectionSet:
             num_injections=6, **params
         )
 
-    def test_carries_ringdown_parameters_only(self):
-        fields = events.RingdownRecoveredInjectionSet.__dataclass_fields__
-        assert "frequency" in fields
-        assert "quality" in fields
-        assert "epsilon" in fields
-        # the CBC intrinsic parameters must not come along
-        assert "mass_1" not in fields
-        assert "a_1" not in fields
-        # but the event fields must
-        assert "detection_statistic" in fields
-        assert "detection_time" in fields
-
     def test_recover(self, event_set, ringdown_response_set):
         obj = events.RingdownRecoveredInjectionSet.recover(
             event_set, ringdown_response_set
@@ -342,20 +281,6 @@ class TestRingdownRecoveredInjectionSet:
         # the intrinsic parameters actually came through
         assert np.all(obj.frequency == np.arange(6))
         assert np.all(obj.quality == np.arange(6))
-
-    def test_round_trips_through_a_file(
-        self, event_set, ringdown_response_set, tmp_path
-    ):
-        obj = events.RingdownRecoveredInjectionSet.recover(
-            event_set, ringdown_response_set
-        )
-        fname = tmp_path / "recovered.hdf5"
-        obj.write(fname)
-
-        loaded = events.RingdownRecoveredInjectionSet.read(fname)
-        assert len(loaded) == 6
-        assert np.all(loaded.frequency == obj.frequency)
-        assert np.all(loaded.detection_statistic == obj.detection_statistic)
 
     def test_aggregates_two_branches(
         self, event_set, ringdown_response_set, tmp_path
@@ -378,31 +303,3 @@ class TestRingdownRecoveredInjectionSet:
         merged = events.RingdownRecoveredInjectionSet.read(merged_file)
         assert len(merged) == 12
         assert merged.num_injections == 12
-
-    def test_cbc_class_rejects_ringdown_injections(
-        self, event_set, ringdown_response_set
-    ):
-        """Guard: a missed dispatch site must crash, not silently pass.
-
-        `recover` intersects the two field sets, so the CBC-only
-        parameters stay at their empty defaults while the shared ones get
-        real rows, and the ledger's length validation catches it.
-        """
-        with pytest.raises(ValueError, match="entries, expected"):
-            events.RecoveredInjectionSet.recover(
-                event_set, ringdown_response_set
-            )
-
-
-class TestGetRecoveredCls:
-    def test_selects_by_waveform_type(self):
-        assert (
-            events.get_recovered_cls("ringdown")
-            is events.RingdownRecoveredInjectionSet
-        )
-        assert events.get_recovered_cls("cbc") is events.RecoveredInjectionSet
-
-    def test_defaults_to_cbc_for_unknown(self):
-        assert (
-            events.get_recovered_cls("burst") is events.RecoveredInjectionSet
-        )

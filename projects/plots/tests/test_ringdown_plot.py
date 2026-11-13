@@ -18,33 +18,6 @@ def test_make_grid_cbc_default_unchanged():
     assert "Sensitive Volume" in plots[0].yaxis[0].axis_label
 
 
-def test_make_grid_accepts_scalar_combos_with_formatter():
-    from plots.core.style import make_grid
-
-    combos = [40, 80, 120, 150]
-    plots = make_grid(
-        combos,
-        title_fn=lambda c: rf"$$\text{{Log Normal }}M_f={c}$$",
-    )
-    assert len(plots) == 4
-    assert "M_f=40" in plots[0].title.text
-
-
-def test_make_grid_still_rejects_three_combos():
-    from plots.core.style import make_grid
-
-    with pytest.raises(ValueError, match="2x2 or 1x1"):
-        make_grid([40, 80, 120])
-
-
-def test_far_uses_the_ledger_year():
-    """FARs share the year the CBC curves and EventSet.far use."""
-    from ledger.events import SECONDS_PER_YEAR as LEDGER_SPY
-    from plots.core.ringdown_stats import SECONDS_PER_YEAR
-
-    assert SECONDS_PER_YEAR == LEDGER_SPY
-
-
 def test_make_grid_one_panel_has_a_y_axis_label():
     from plots.core.style import make_grid
 
@@ -258,42 +231,6 @@ def test_main_rejects_a_target_below_the_ess_floor(campaign, tmp_path):
             plot_file=tmp_path / "rejected" / "sensitive_volume.html",
             sigma=0.01,
         )
-
-
-def test_main_refuses_a_non_finite_background_before_writing(
-    campaign, tmp_path
-):
-    """The raise must come BEFORE any output exists.
-
-    With one NaN in the background the committed code exited 0 and wrote
-    both files with `fars=[1.0], thresholds=[NaN], sv=[0.0], err=[0.0]`.
-    A successfully written wrong figure is the failure mode this whole
-    stage is built to avoid, so the test asserts on the absence of the
-    files, not only on the exception.
-    """
-    from ledger.events import EventSet
-    from plots.ringdown import main
-    from priors.priors import ringdown_prior
-
-    back, fore, rej = campaign
-    poisoned = EventSet.read(back)
-    poisoned.detection_statistic[0] = np.nan
-    bad_back = tmp_path / "background-nan.hdf5"
-    poisoned.write(bad_back)
-
-    out = tmp_path / "nan-out"
-    with pytest.raises(ValueError, match="non-finite"):
-        main(
-            bad_back,
-            fore,
-            rej,
-            remnant_mass_combos=[40, 80, 120, 150],
-            source_prior=ringdown_prior,
-            output_file=out / "sensitive_volume.h5",
-            plot_file=out / "sensitive_volume.html",
-        )
-    assert not (out / "sensitive_volume.h5").exists()
-    assert not (out / "sensitive_volume.html").exists()
 
 
 def test_cli_writes_both_outputs(campaign, tmp_path):

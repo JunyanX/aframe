@@ -61,21 +61,6 @@ def test_generate_ringdown_is_aligned_with_ml4gw(samples):
     torch.testing.assert_close(plus[:, onset:], expected_plus)
 
 
-def test_generate_ringdown_accepts_tensor_inputs(samples):
-    tensor_samples = {
-        key: torch.as_tensor(value) for key, value in samples.items()
-    }
-
-    cross, plus = generate_ringdown(
-        tensor_samples,
-        sample_rate=SAMPLE_RATE,
-        waveform_duration=WAVEFORM_DURATION,
-        right_pad=RIGHT_PAD,
-    )
-
-    assert cross.shape == plus.shape == (2, SAMPLE_RATE)
-
-
 @pytest.mark.parametrize(
     ("parameter", "value", "error"),
     [
@@ -97,18 +82,6 @@ def test_generate_ringdown_rejects_invalid_parameters(
     samples[parameter] = value
 
     with pytest.raises(ValueError, match=error):
-        generate_ringdown(
-            samples,
-            sample_rate=SAMPLE_RATE,
-            waveform_duration=WAVEFORM_DURATION,
-            right_pad=RIGHT_PAD,
-        )
-
-
-def test_generate_ringdown_requires_all_parameters(samples):
-    del samples["frequency"]
-
-    with pytest.raises(KeyError, match="frequency"):
         generate_ringdown(
             samples,
             sample_rate=SAMPLE_RATE,

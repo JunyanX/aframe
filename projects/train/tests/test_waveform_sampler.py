@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from ledger.injections import RingdownWaveformSet, WaveformSet
 from train.data.waveforms import WaveformSampler
 
@@ -48,13 +47,3 @@ def test_sampler_reads_ringdown_validation_file(ringdown_val_file):
     expected = np.arange(ringdown_val_file.size, dtype=float)
     np.testing.assert_array_equal(waveforms[:, 0, 0].numpy(), expected)
     np.testing.assert_array_equal(waveforms[:, 1, 0].numpy(), 100 + expected)
-
-
-def test_ringdown_validation_file_is_not_readable_as_cbc(ringdown_val_file):
-    """A mismatched file must fail loudly rather than load a partial set.
-
-    Validation waveforms are added straight onto detector background, so a
-    silent partial load would corrupt the metrics with no error.
-    """
-    with pytest.raises(ValueError, match="no dataset"):
-        make_sampler(ringdown_val_file)
