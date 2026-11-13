@@ -46,7 +46,7 @@ def redshift_ratio_norm(zmin, zmax, cosmology, n=2001):
     """
     z = np.linspace(zmin, zmax, n)
     dv = cosmology.differential_comoving_volume(z).value
-    return float(np.trapz(dv, z) / np.trapz(dv / (1 + z), z))
+    return float(np.trapezoid(dv, z) / np.trapezoid(dv / (1 + z), z))
 
 
 def log_importance_weights(
@@ -124,10 +124,10 @@ def _support_grid(source_prior, cosmology, n_q, n_z):
     # Q keeps the source marginal; z uses the TARGET marginal, which is
     # what the weights actually impose (design Ruling 4).
     w_q = quality.prob(q)
-    w_q = w_q / np.trapz(w_q, q)
+    w_q = w_q / np.trapezoid(w_q, q)
     dv = cosmology.differential_comoving_volume(z).value
     p_z = dv / (1 + z)
-    p_z = p_z / np.trapz(p_z, z)
+    p_z = p_z / np.trapezoid(p_z, z)
     return q, z, qq, zz, m_min, m_max, w_q, p_z
 
 
@@ -164,7 +164,9 @@ def support_coverage(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
         source_prior, cosmology, n_q, n_z
     )
     a = _target_mass_fraction(m_min, m_max, m0, sigma)
-    return float(np.trapz(np.trapz(a * p_z[None, :], z, axis=1) * w_q, q))
+    return float(
+        np.trapezoid(np.trapezoid(a * p_z[None, :], z, axis=1) * w_q, q)
+    )
 
 
 def conditioned_means(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
@@ -180,7 +182,7 @@ def conditioned_means(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
     )
     a = _target_mass_fraction(m_min, m_max, m0, sigma)
     joint = a * w_q[:, None] * p_z[None, :]
-    norm_c = np.trapz(np.trapz(joint, z, axis=1), q)
+    norm_c = np.trapezoid(np.trapezoid(joint, z, axis=1), q)
     if not np.isfinite(norm_c) or norm_c <= 0:
         raise ValueError(
             f"target M0={m0}, sigma={sigma} left no numerically "
@@ -192,10 +194,10 @@ def conditioned_means(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
         )
     return {
         "quality": float(
-            np.trapz(np.trapz(joint * qq, z, axis=1), q) / norm_c
+            np.trapezoid(np.trapezoid(joint * qq, z, axis=1), q) / norm_c
         ),
         "redshift": float(
-            np.trapz(np.trapz(joint * zz, z, axis=1), q) / norm_c
+            np.trapezoid(np.trapezoid(joint * zz, z, axis=1), q) / norm_c
         ),
     }
 
