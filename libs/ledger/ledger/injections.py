@@ -11,7 +11,7 @@ from ledger.ledger import PATH, Ledger, metadata, parameter, waveform
 
 # Physical constants, copied verbatim from ml4gw/constants.py so that the
 # remnant mass below is the exact inverse of the transform
-# ml4gw/waveforms/adhoc/ringdown.py:79-84 used to generate the waveform.
+# `ml4gw.waveforms.adhoc.Ringdown` used to generate the waveform.
 # projects/data/tests/waveforms/test_ringdown.py pins them to ml4gw's.
 # Solar mass in kg
 MSUN = 1.988409902147041637325262574352366540e30
@@ -279,7 +279,7 @@ class RingdownParameterSet(Ledger):
         """Dimensionless remnant spin, inverted from the quality factor.
 
         The inverse of the Echeverria/Finn fit ml4gw applies in
-        `ml4gw/waveforms/adhoc/ringdown.py:79`.
+        `ml4gw.waveforms.adhoc.Ringdown`.
         """
         return 1 - (2 / self.quality) ** (20 / 9)
 
@@ -287,9 +287,9 @@ class RingdownParameterSet(Ledger):
     def remnant_mass(self):
         """Remnant mass in solar masses, detector frame.
 
-        The inverse of `ml4gw/waveforms/adhoc/ringdown.py:80-84`, converted
-        from kg. Detector frame because `ringdown_prior` samples frequency
-        in the detector frame (`detector_frame_prior = True`).
+        The inverse of the frequency fit in `ml4gw.waveforms.adhoc.Ringdown`,
+        converted from kg. Detector frame because `ringdown_prior` samples
+        frequency in the detector frame (`detector_frame_prior = True`).
         """
         return (
             (1 / (2 * np.pi))
@@ -331,8 +331,8 @@ class RingdownParameterSet(Ledger):
     def remnant_mass_source(self):
         """Remnant mass in solar masses, source frame.
 
-        The quantity CBC's sensitive volume bins on
-        (`projects/plots/plots/legacy/main.py:104-108`).
+        The counterpart of the source-frame masses that CBC's sensitive
+        volume is weighted on (`plots.core.sv`).
         """
         return self.remnant_mass / (1 + self.redshift)
 

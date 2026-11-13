@@ -279,7 +279,7 @@ def log_normal_remnant_mass(
         cosmology:
             Accepted for signature symmetry with the other priors here. The
             target carries no redshift term: redshift enters the weight
-            through the ratio in `plots.legacy.ringdown_stats`, and the
+            through the ratio in `plots.core.ringdown_stats`, and the
             volume bound comes from the source prior.
 
     Returns:

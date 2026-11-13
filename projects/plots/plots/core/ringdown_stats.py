@@ -3,11 +3,11 @@
 Deliberately free of bokeh so it can be imported and tested without
 `plots.sif`; the figure lives in `plots.ringdown`.
 
-The target population, stated once so it is never implicit (design
-Ruling 3): log normal in source-frame remnant mass, with the spin
-marginal equal to the transformed injection marginal, and the redshift
-marginal proportional to dV_c/(1+z) so that it matches the measure
-`utils.cosmology.get_astrophysical_volume` integrates.
+The target population, stated once so it is never implicit: log normal in
+source-frame remnant mass, with the spin marginal equal to the transformed
+injection marginal, and the redshift marginal proportional to dV_c/(1+z) so
+that it matches the measure `utils.cosmology.get_astrophysical_volume`
+integrates.
 
 Under that choice the quality and distance factors cancel between the
 Jacobian and the injection density, leaving a one-dimensional weight
@@ -114,7 +114,7 @@ def _support_grid(source_prior, cosmology, n_q, n_z):
     m_max = k * g / (f_min * (1 + zz))
 
     # Q keeps the source marginal; z uses the TARGET marginal, which is
-    # what the weights actually impose (design Ruling 4).
+    # what the weights actually impose.
     w_q = quality.prob(q)
     w_q = w_q / np.trapezoid(w_q, q)
     dv = cosmology.differential_comoving_volume(z).value

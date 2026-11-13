@@ -56,13 +56,6 @@ def test_make_grid_one_panel_has_a_y_axis_label():
 def campaign(tmp_path):
     """A small, deterministic campaign written under tmp_path.
 
-    The committed tests must NOT read
-    /home/junyan.xu/aframe/ringdown-e2e-260911: that path does not exist
-    on another checkout or on the GitHub runner, which mounts the repo at
-    /opt/aframe and runs the project suite
-    (.github/workflows/project-build-test.yaml). The real campaign stays
-    available as the local smoke command in Step 6.
-
     Sized so the assertions stay meaningful: enough background ranks for
     a FAR grid, and enough accepted and rejected draws for the default
     targets to clear ess_floor.

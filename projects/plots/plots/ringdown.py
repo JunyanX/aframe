@@ -7,9 +7,8 @@ vetoes.
 
 Vetoes are deliberately omitted. The CBC entry point carries optional O3
 CBC veto categories, gate windows and catalog exclusions; the ringdown
-`sensitive_volume` rule never passes them (`projects/plots/plots.smk`
-refuses vetos for ringdown runs), and veto policy for this work lives in a
-separate performance-analysis repository.
+`compute_sensitive_volume` rule never passes them
+(`projects/plots/plots.smk` refuses vetos for ringdown runs).
 Retaining the branch would also be a live numerical hazard: `apply_vetos`
 deletes foreground rows while every rejected draw stays in the
 normalization, so vetoing one of two recoveries against two rejected draws
@@ -102,9 +101,9 @@ def main(
     )
 
     # Compute redshift ONCE per ledger and derive source mass from it.
-    # The ledger properties are deliberately uncached (design Ruling 9),
-    # so reading `.remnant_mass_source` and then `.redshift` would run the
-    # z_at_value inversion twice over every draw.
+    # The ledger properties are deliberately uncached, so reading
+    # `.remnant_mass_source` and then `.redshift` would work out every
+    # draw's redshift twice.
     z_fore = foreground_set.redshift
     z_rej = rejected.redshift
     redshift = np.concatenate([z_fore, z_rej])
@@ -159,7 +158,7 @@ def main(
         # with the means guard: at M0=1000, sigma=0.01 the interval
         # probabilities underflow and `conditioned_means` would raise
         # first, reporting an arithmetic problem for what is a
-        # statistical one. Design Ruling 4 keeps those distinct.
+        # statistical one.
         if ess < ess_floor:
             raise ValueError(
                 f"target M0={m0} has effective sample size {ess:.4g}, "
@@ -248,11 +247,7 @@ def main(
             fill_color=color,
             fill_alpha=0.4,
         )
-        # A Title, not a Div. bokeh is pinned to 3.4.3
-        # (projects/plots/uv.lock:448), where Plot.below is
-        # List(Instance(Renderer)); Title is an Annotation and therefore a
-        # Renderer, but a Div is a widget and is rejected. Plain text only
-        # -- Title does not render HTML.
+        # Plain text only: a Title does not render HTML.
         note = f"coverage {coverages[i]:.4f} | ESS {ess_values[i]:.1f}"
         if coverages[i] < coverage_floor:
             note += " | BELOW COVERAGE FLOOR"
