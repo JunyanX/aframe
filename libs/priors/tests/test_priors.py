@@ -3,11 +3,10 @@ from bilby.core.prior import Cosine, LogUniform, PriorDict, Sine, Uniform
 from bilby.gw.prior import UniformComovingVolume
 from priors.priors import ringdown_prior
 
-# The distribution of each parameter, not its bounds, which are tuned from
-# one campaign to the next. The distributions are what the ringdown
-# sensitive volume takes for granted. Its weight is written for injections
-# uniform in comoving volume, and it isn't reweighted in sky position or
-# orientation, so those have to be isotropic.
+# Pins each parameter's distribution but not its bounds, which change
+# between campaigns. The ringdown sensitive volume relies on these
+# distributions: its weights assume distances uniform in comoving volume,
+# and sky position and orientation drawn uniformly over all directions.
 RINGDOWN_DISTRIBUTIONS = {
     "frequency": LogUniform,
     "quality": Uniform,

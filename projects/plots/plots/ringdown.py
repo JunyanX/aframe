@@ -1,20 +1,10 @@
-"""Ringdown sensitive volume, the sibling of `plots.main`.
+"""Ringdown sensitive volume, the counterpart of `plots.main`.
 
-Differs from the CBC path in four places: the weight construction, the
-volume bounds (derived from the distance prior rather than read from a
-redshift key), the absence of a GWTC-3 comparison set, and the absence of
-vetoes.
-
-Vetoes are deliberately omitted. The CBC entry point carries optional O3
-CBC veto categories, gate windows and catalog exclusions; the ringdown
-`compute_sensitive_volume` rule never passes them
-(`projects/plots/plots.smk` refuses vetos for ringdown runs).
-Retaining the branch would also be a live numerical hazard: `apply_vetos`
-deletes foreground rows while every rejected draw stays in the
-normalization, so vetoing one of two recoveries against two rejected draws
-gives 1/3 rather than 1/4 for a full-campaign estimand. If vetoes are ever
-wanted here, they need an explicit decision about whether a vetoed
-injection is a miss over the original exposure or defines a reduced one.
+Differs from the CBC path in four places: the weights, the volume bounds
+(converted from the distance prior, where CBC reads a redshift prior),
+no GWTC-3 comparison, and no vetoes. Vetoes are deliberately left out of
+ringdown runs, and `projects/plots/plots.smk` refuses a ringdown config
+that sets them.
 """
 
 import logging

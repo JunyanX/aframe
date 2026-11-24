@@ -329,13 +329,9 @@ def ringdown_prior(
 
     # Parameters consumed directly by ml4gw.waveforms.Ringdown
     #
-    # ml4gw infers remnant spin from quality as 1 - (2 / Q) ** (20 / 9), so
-    # Q in [2, 20] spans spin 0 to 0.994, the quality range of the LSC
-    # ringdown template banks. A typical BBH remnant, spin ~0.69, is Q ~ 3.4.
-    # Lower spin puts a given remnant mass at a lower frequency, so the 40 Hz
-    # floor is what keeps low-spin remnants of the default sensitivity
-    # targets (40-150 Msun, source frame) covered out to the distance
-    # ceiling below.
+    # Q in [2, 20] is remnant spin 0 to 0.994, since ml4gw takes the spin as
+    # 1 - (2 / Q) ** (20 / 9). The 40 Hz floor keeps low-spin remnants of
+    # the default sensitive-volume targets (40-150 Msun) inside the prior.
     prior["frequency"] = LogUniform(40, 1000, unit="Hz")
     prior["quality"] = Uniform(2, 20)
     prior["epsilon"] = Uniform(0, 0.1)

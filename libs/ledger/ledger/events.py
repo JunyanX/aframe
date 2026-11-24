@@ -214,13 +214,13 @@ class EventSet(Ledger):
 
 
 class RecoveredInjectionMixin:
-    """Recovery behaviour shared by both waveform families.
+    """Matching events to injections, shared by both cbc and ringdown.
 
-    `recover` and the metadata disambiguation depend only on
-    `injection_time`, `shift` and the event fields, so they are
-    independent of which parameter schema the subclass carries. This is
-    a plain mixin, not a dataclass: it must contribute no fields, or
-    it would shift every subclass's positional __init__ signature.
+    `recover` reads only the injection times, the shifts and the event
+    fields, and copies the injection parameters by name, so the same code
+    serves CBC and ringdown. This is a plain mixin, not a dataclass, so
+    that it declares no fields: dataclass fields set the order of the
+    positional `__init__` arguments.
     """
 
     @classmethod

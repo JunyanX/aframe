@@ -300,22 +300,14 @@ class RingdownParameterSet(Ledger):
 
     @property
     def redshift(self):
-        """Redshift implied by the sampled luminosity distance.
+        """Redshift of each draw's luminosity distance, in DEFAULT_COSMOLOGY.
 
-        Uses DEFAULT_COSMOLOGY. A property takes no arguments, so this is
-        deliberately not caller-configurable; the cosmology parameter on
-        `LALParameterSet.redshift` is unreachable and is not copied here.
-        Not cached: `Ledger.append` replaces the field arrays without
-        clearing caches, so a cached value would go stale and change shape.
-        Guarded for an empty ledger: `z_at_value` raises on a zero-sized
-        input, but an empty rejection ledger is a supported pipeline state
-        (`rejection_sample` writes one whenever a branch rejects nothing).
-
-        `z_at_value` solves each draw on its own, ~2.6 ms apiece, so a
-        sensitive volume over millions of draws took hours. Instead it
-        solves only the extremes, then interpolates the distance-redshift
-        relation on a grid log-spaced in redshift between them, which
-        matches the per-draw solve to ~1e-8 relative.
+        `ringdown_prior` samples luminosity distance rather than redshift, and
+        the cosmology gives distance as a function of redshift with no
+        closed-form inverse. Rather than solve for each draw, which took hours
+        over a campaign's millions of draws, this interpolates the relation on
+        a grid in redshift between the smallest and largest distance. It agrees
+        with the exact solve to about 1e-8.
         """
         if self.distance.size == 0:
             return np.array([], dtype=np.float64)

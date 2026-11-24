@@ -5,11 +5,10 @@
 
 waveform_type: ringdown
 
-# A ringdown has no inspiral, so right_pad is the span from the onset to
-# the right edge of the waveform: the length of the ringdown itself. The
-# longest damping time the prior admits is Q / (pi f) = 20 / (pi * 40)
-# = 159 ms, so 2 s is ~12.6 e-foldings, with the tail below 4e-6 of the
-# onset amplitude.
+# For a ringdown, right_pad is the length of the ringdown itself: the
+# waveform is zero up to the onset, followed by right_pad seconds of
+# ringdown. 2 s is enough for the slowest-decaying ringdown the prior
+# allows (Q = 20 at 40 Hz, damping time 0.16 s).
 right_pad: 2.0
 
 populations:

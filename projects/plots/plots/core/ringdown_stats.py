@@ -1,20 +1,22 @@
-"""Numeric core of the ringdown sensitive-volume calculation.
+"""Numerical part of the ringdown sensitive volume; `plots.ringdown`
+draws the figure.
 
-Deliberately free of bokeh so it can be imported and tested without
-`plots.sif`; the figure lives in `plots.ringdown`.
+The volume is for a target population that each injection is reweighted
+to. Its source-frame remnant mass is log normal about the target mass. Its
+redshift density is proportional to dV_c/dz / (1 + z), the measure
+`utils.cosmology.get_astrophysical_volume` integrates. Everything else,
+including spin, keeps the injections' distribution.
 
-The target population, stated once so it is never implicit: log normal in
-source-frame remnant mass, with the spin marginal equal to the transformed
-injection marginal, and the redshift marginal proportional to dV_c/(1+z) so
-that it matches the measure `utils.cosmology.get_astrophysical_volume`
-integrates.
+The injections were drawn log-uniform in frequency and uniform in comoving
+volume, so a draw with frequency f, source-frame mass M and redshift z has
+weight
 
-Under that choice the quality and distance factors cancel between the
-Jacobian and the injection density, leaving a one-dimensional weight
+    w = p_M(M) * (M / f) / q_f(f) * C_z / (1 + z)
 
-    w  =  p_M(M_src) * |dM_src/df| / q_f(f) * r_z(z)
-
-with |dM_src/df| = M_src / f and r_z(z) = C_z / (1 + z).
+p_M is the target mass density, and M / f turns it into a density in
+frequency, since M is proportional to 1 / f at fixed quality and redshift.
+q_f is the injections' frequency density, and C_z normalizes the redshift
+ratio.
 """
 
 import numpy as np
@@ -68,24 +70,25 @@ def log_importance_weights(
 
 
 def normalize_log_weights(log_w):
-    """Normalize log weights to a probability vector summing to one.
+    """Turn log weights into weights that sum to one.
 
-    Raises rather than emitting NaNs, so that an invalid weight vector is
-    a loud failure. This is the arithmetic guard only — a vector that
-    normalizes fine but concentrates on one draw is a *statistical*
-    failure, caught by `effective_sample_size` against `ess_floor`.
+    Works in log space, so weights too small to represent directly still
+    come out right, and a -inf entry is a weight of zero. Raises if any
+    entry is NaN or +inf, or if no entry is finite.
+
+    It doesn't check that the weights are useful: weights dominated by a
+    single draw normalize fine, and `plots.ringdown.main` rejects them
+    through the effective sample size.
     """
     log_w = np.asarray(log_w, dtype=float)
     if np.any(np.isnan(log_w)) or np.any(np.isposinf(log_w)):
         raise ValueError("importance weights are not finite")
     if not np.any(np.isfinite(log_w)):
         raise ValueError("importance weights have no finite entries")
-    # Subtract the max into a new array before normalizing: logsumexp
-    # sums stably, but its returned scalar still has to represent a large
-    # common offset plus a small logarithmic correction, and that
-    # correction rounds away once ln(n) falls below ulp(offset). Shifting
-    # to a max of zero keeps the correction representable. A new array,
-    # not `-=`, since callers keep their own reference to `log_w`.
+    # Shift so the largest is 0. With a large common offset, such as
+    # -1e16, the small correction logsumexp adds would be lost to
+    # rounding. A new array rather than `-=`, to leave the caller's
+    # array alone.
     log_w = log_w - np.max(log_w)
     total = logsumexp(log_w)
     return np.exp(log_w - total)
@@ -124,15 +127,11 @@ def _support_grid(source_prior, cosmology, n_q, n_z):
 
 
 def _target_mass_fraction(m_min, m_max, m0, sigma):
-    """P(m_min <= M <= m_max) under LogNormal(ln m0, sigma), stably.
+    """Fraction of the target's mass distribution between m_min and m_max.
 
-    A plain CDF difference loses the whole interval in the upper tail:
-    both terms round to 1.0 and the difference is exactly 0.0 where the
-    true probability is small but nonzero. At m0=1, sigma=0.3 over
-    [24, 273] Msun the naive form gives 0.0 against 1.596885e-26 from the
-    survival-function difference. That zero propagates to a zero coverage
-    normalization and NaN conditioned means, with an ESS that still
-    passes its floor -- so nothing downstream catches it.
+    The target is log normal with median m0 and log-width sigma. Far above
+    the median, both cumulative probabilities round to exactly 1 and their
+    difference to 0, so that side is computed from the upper tail instead.
     """
     from scipy.stats import norm
 
@@ -162,12 +161,13 @@ def support_coverage(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
 
 
 def conditioned_means(m0, sigma, source_prior, cosmology, n_q=601, n_z=2001):
-    """Means of the support-conditioned population p_S.
+    """Mean quality and redshift of the population the volume describes.
 
-    Self-normalizing the sampled weights estimates p_S for every target
-    whose coverage is below one, so this — not the nominal marginal — is
-    the reference a target-identity test compares against, regardless of
-    any warning threshold.
+    The weights are normalized over the injections, which cover only part
+    of a target whose coverage is below one. The volume then describes the
+    target restricted to that part, whose spin and redshift can differ from
+    the target's. These are its means, written to the output beside the
+    coverage.
     """
     q, z, qq, zz, m_min, m_max, w_q, p_z = _support_grid(
         source_prior, cosmology, n_q, n_z
@@ -201,22 +201,19 @@ def effective_sample_size(weights):
 
 
 def far_threshold_grid(background_statistic, tb_seconds, max_far):
-    """False alarm rates and matching detection-statistic thresholds.
+    """The FAR axis of the sensitive volume: false alarm rates and the
+    detection-statistic thresholds that give them.
 
-    Returns one (FAR, threshold) pair per distinct background value whose
-    rate is at most `max_far`, in order of increasing FAR. Each FAR is
-    the inclusive exceedance rate of its threshold,
-    `count(background_statistic >= threshold) / Tb_years`, not a rank.
-    Ranking consecutive sorted events, as `plots.core.sv._far_grid` does,
-    understates the FAR of a threshold inside a tie group: the volume
-    counts every injection with `statistic >= threshold`, which admits
-    the whole tie group, while a rank credits only its first member.
-    Background `[9.0, 9.0, 8.0]` over one year ranks 9.0 at 1/yr, when
-    something scoring at least 9.0 is reported 2/yr.
+    Returns one (FAR, threshold) pair for each distinct background value
+    whose rate is at most `max_far`, in order of increasing FAR. A
+    threshold's FAR is how often the background scores at least that much,
+    `count(background_statistic >= threshold) / Tb_years`. Counting rather
+    than ranking, as `plots.core.sv._far_grid` does, gives tied values
+    their full rate: background `[9.0, 9.0, 8.0]` over one year puts 9.0
+    at 2/yr, where a rank says 1/yr.
 
-    Raises if no threshold has a rate of at most `max_far`, and if the
-    background holds a NaN or an infinity. Those are not dropped, since
-    `tb_seconds` would then describe a livetime the rest doesn't cover.
+    Raises if no threshold is within `max_far`, or if the background holds
+    a NaN or an infinity.
     """
     background_statistic = np.asarray(background_statistic, dtype=float)
     if not np.isfinite(tb_seconds) or tb_seconds <= 0:
